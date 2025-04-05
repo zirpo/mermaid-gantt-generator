@@ -138,11 +138,15 @@ cython_debug/
 .DS_Store
 
 # Project specific ignores
+# Ignore output directory by default, but allow specific sample files inside
 output/
-*.mmd
-*.png
-*.svg
+!output/sample_timeline.png
+!output/sample_timeline.svg
+!output/sample_timeline.mmd
+
+# Ignore CSV files by default, but allow the specific sample file
 *.csv
+!data/sample_timeline.csv
 
 # Ignore specific sample files if they contain sensitive info (optional)
 # data/my_sensitive_project.csv
