@@ -4,14 +4,17 @@ A Python tool to generate Mermaid Gantt chart images (PNG/SVG) from project time
 
 ## Features
 
-*   Parses CSV files containing project tasks with start/end dates, completion status, and work streams.
+*   Parses CSV files containing project tasks with start/end dates (accepts `YYYY-MM-DD` and `dd.mm.yyyy`), completion status, and work streams.
 *   Calculates task durations and determines status (`done`, `active`).
 *   Supports explicit milestones defined in the CSV.
 *   Supports grouped milestones triggered when all constituent tasks (sharing the same `MilestoneGroup` identifier) are 100% complete.
 *   Generates Mermaid Gantt chart syntax, organizing work packages into sections based on `WorkStream`.
 *   Uses Mermaid's default status colors (active, done, default) for WorkPackage bars.
+*   Formats the Gantt chart date axis as `dd.mm` for better readability.
 *   Uses the Mermaid CLI (`mmdc`) to convert the generated syntax into PNG or SVG images.
 *   Derives the chart title from the input CSV filename.
+*   Automatically adds a timestamp (`_YYYYMMDD_HHMMSS`) to output filenames (both `.mmd` and image) to prevent overwriting.
+*   Provides both a Command-Line Interface (CLI) and a Graphical User Interface (GUI) for generating charts.
 
 ## Prerequisites
 
@@ -43,6 +46,10 @@ A Python tool to generate Mermaid Gantt chart images (PNG/SVG) from project time
 
 ## Usage
 
+There are two ways to use the generator:
+
+### 1. Command-Line Interface (CLI)
+
 Run the script from the command line, providing the input CSV file path and the desired output image file path.
 
 ```bash
@@ -52,7 +59,7 @@ python src/main.py <path_to_input.csv> <path_to_output_image.[png|svg]> [--forma
 **Arguments:**
 
 *   `input_file`: Path to the input CSV file containing timeline data. (See `data/sample_timeline.csv` for format).
-*   `output_file`: Path where the generated image should be saved. The file extension (`.png` or `.svg`) determines the output format if `--format` is not specified, and must match the `--format` argument if it is provided.
+*   `output_file`: Path where the generated image should be saved. The script will automatically append a timestamp (e.g., `_20240504_223000`) to the filename before the extension. The file extension (`.png` or `.svg`) determines the output format if `--format` is not specified, and must match the `--format` argument if it is provided.
 *   `--format` (optional): Specify the output image format (`png` or `svg`). Defaults to `png`.
 
 **Example:**
@@ -68,9 +75,25 @@ python src/main.py data/sample_timeline.csv output/my_project_timeline.svg --for
 The script will:
 1.  Read and process `data/sample_timeline.csv`.
 2.  Generate Mermaid syntax.
-3.  Save the syntax to `output/my_project_timeline.mmd`.
-4.  Use `mmdc` to convert the `.mmd` file into `output/my_project_timeline.png` (or `.svg`).
+3.  Save the syntax to a timestamped `.mmd` file (e.g., `output/my_project_timeline_20240504_223000.mmd`).
+4.  Use `mmdc` to convert the `.mmd` file into a timestamped image file (e.g., `output/my_project_timeline_20240504_223000.png`).
 5.  Log progress and any errors to the console.
+
+### 2. Graphical User Interface (GUI)
+
+Alternatively, run the GUI script:
+
+```bash
+python src/gui.py
+```
+
+This will open a window where you can:
+*   Browse to select your input CSV file.
+*   Browse to select the output folder where the generated image will be saved.
+*   Choose the output format (PNG or SVG).
+*   Click "Generate Chart".
+
+The GUI will automatically use the input filename as the base for the output filename and append a timestamp, saving the result in the selected folder.
 
 ## Input CSV Format
 
@@ -78,8 +101,8 @@ The input CSV file must contain the following columns:
 
 *   `WorkStream`: Category/group for items (used for sections).
 *   `WorkPackage`: The name of the work package or milestone to be displayed on the Gantt chart.
-*   `Start`: Item start date (Format: `YYYY-MM-DD`).
-*   `End`: Item end date (Format: `YYYY-MM-DD`).
+*   `Start`: Item start date (Formats accepted: `YYYY-MM-DD` or `dd.mm.yyyy`).
+*   `End`: Item end date (Formats accepted: `YYYY-MM-DD` or `dd.mm.yyyy`).
 
 Optional columns:
 
