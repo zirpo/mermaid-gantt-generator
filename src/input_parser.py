@@ -44,16 +44,22 @@ def parse_csv(file_path: str) -> pd.DataFrame | None:
             if df[col].notna().any():
                  df[col] = df[col].apply(lambda x: x.strip() if isinstance(x, str) else x)
 
-        # Dates
+        # Dates - Try parsing multiple formats
         for col in date_columns:
-            # Attempt parsing, coercing errors to NaT (Not a Time)
-            df[col] = pd.to_datetime(df[col], format='%Y-%m-%d', errors='coerce')
+            # Convert column to string first to handle potential non-string types robustly before parsing
+            df[col] = df[col].astype(str)
+            # Attempt parsing dd.mm.yyyy first
+            parsed_dates_eu = pd.to_datetime(df[col], format='%d.%m.%Y', errors='coerce')
+            # Attempt parsing YYYY-MM-DD for those that failed the first format
+            parsed_dates_iso = pd.to_datetime(df[col], format='%Y-%m-%d', errors='coerce')
+            # Combine results: Use EU format if valid, otherwise use ISO format
+            df[col] = parsed_dates_eu.combine_first(parsed_dates_iso)
+
+            # Check for any remaining NaNs after trying both formats
             if df[col].isnull().any():
                 invalid_rows = df[df[col].isnull()].index.tolist()
-                logging.error(f"Invalid date format found in column '{col}' for rows (0-based index): {invalid_rows}. Expected YYYY-MM-DD.")
-                # Optionally, filter out invalid rows or return None
-                # For now, we log error and proceed, NaT might cause issues later
-                # return None # Stricter approach
+                logging.error(f"Invalid date format found in column '{col}' for rows (0-based index): {invalid_rows}. Expected DD.MM.YYYY or YYYY-MM-DD.")
+                # return None # Stricter approach: Exit if any date is invalid
 
         # PercentComplete
         if 'PercentComplete' in df.columns:

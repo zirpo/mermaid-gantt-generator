@@ -23,7 +23,8 @@ def generate_mermaid_gantt(df: pd.DataFrame, project_title: str) -> str:
     mermaid_lines = [
         "gantt",
         f"    title {project_title}",
-        "    dateFormat  YYYY-MM-DD"
+        "    dateFormat  YYYY-MM-DD",
+        "    axisFormat  %d.%m"  # Added to format axis labels as dd.mm
     ]
 
     # Removed Milestone Styling Setup
