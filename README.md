@@ -65,12 +65,13 @@ python src/main.py <path_to_input.csv> <path_to_output_image.[png|svg]> [--forma
 **Example:**
 
 ```bash
-# Generate a PNG image from the sample data
+# Generate a PNG image from the sample data (output file will be timestamped)
 python src/main.py data/sample_timeline.csv output/my_project_timeline.png
 
-# Generate an SVG image
+# Generate an SVG image (output file will be timestamped)
 python src/main.py data/sample_timeline.csv output/my_project_timeline.svg --format svg
 ```
+*Note: The output path provided is used to determine the output directory and base filename. The actual saved file will have a timestamp appended (e.g., `output/my_project_timeline_YYYYMMDD_HHMMSS.png`).*
 
 The script will:
 1.  Read and process `data/sample_timeline.csv`.
@@ -88,9 +89,10 @@ python src/gui.py
 ```
 
 This will open a window where you can:
-*   Browse to select your input CSV file.
-*   Browse to select the output folder where the generated image will be saved.
+*   Browse to select your input file (accepts both `.csv` and `.xlsx`).
+*   Browse to select the output folder where the generated image will be saved (defaults to the input file's folder).
 *   Choose the output format (PNG or SVG).
+*   Optionally, download template files (`template.csv` or `template.xlsx`) to see the required format.
 *   Click "Generate Chart".
 
 The GUI will automatically use the input filename as the base for the output filename and append a timestamp, saving the result in the selected folder.
@@ -101,8 +103,8 @@ The input CSV file must contain the following columns:
 
 *   `WorkStream`: Category/group for items (used for sections).
 *   `WorkPackage`: The name of the work package or milestone to be displayed on the Gantt chart.
-*   `Start`: Item start date (Formats accepted: `YYYY-MM-DD` or `dd.mm.yyyy`).
-*   `End`: Item end date (Formats accepted: `YYYY-MM-DD` or `dd.mm.yyyy`).
+*   `Start`: Item start date (Formats accepted: `YYYY-MM-DD` or `dd.mm.yyyy`). Excel date formats should also work but plain text dates in these formats are recommended.
+*   `End`: Item end date (Formats accepted: `YYYY-MM-DD` or `dd.mm.yyyy`). Excel date formats should also work but plain text dates in these formats are recommended.
 
 Optional columns:
 
@@ -110,7 +112,7 @@ Optional columns:
 *   `IsMilestone`: Flag (`True`, `False`, `yes`, `no`, `1`, `0`). If `True`, the row (identified by `WorkPackage`) is treated as an explicit milestone using its `End` date (or `Start` date if `End` is missing).
 *   `MilestoneGroup`: Identifier string. Work packages sharing the same identifier belong to a group. If all work packages in a group reach 100% completion, a milestone is automatically generated using this identifier as its name, placed at the latest `End` date of the constituent work packages.
 
-See `data/sample_timeline.csv` and `data/detailed_sample_wp_level.csv` for concrete examples.
+See `templates/template.csv` or `templates/template.xlsx` (downloadable via GUI) for the exact header structure. See `data/sample_timeline.csv` for a populated example.
 
 ## Testing
 

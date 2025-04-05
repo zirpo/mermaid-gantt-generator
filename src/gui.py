@@ -4,6 +4,7 @@ import os
 import sys
 from pathlib import Path
 import logging
+import shutil # Import shutil for file copying
 
 # Adjust sys.path to import the refactored function
 project_root = Path(__file__).resolve().parent.parent
@@ -37,45 +38,70 @@ class GanttApp(tk.Tk):
         self._create_widgets()
 
     def _create_widgets(self):
-        # Frame for input selection
-        input_frame = ttk.Frame(self, padding="10")
-        input_frame.pack(fill=tk.X)
-        ttk.Label(input_frame, text="Input CSV:").pack(side=tk.LEFT, padx=(0, 5))
+        # --- Top Frame (Input/Output Selection) ---
+        top_frame = ttk.Frame(self, padding="10")
+        top_frame.pack(fill=tk.X, expand=True)
+
+        # Input selection
+        input_frame = ttk.Frame(top_frame)
+        input_frame.pack(fill=tk.X, pady=(0, 5)) # Add padding below
+        ttk.Label(input_frame, text="Input File:").pack(side=tk.LEFT, padx=(0, 5)) # Changed label
         ttk.Entry(input_frame, textvariable=self.input_file_path, width=40).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=5)
         ttk.Button(input_frame, text="Browse...", command=self._select_input_file).pack(side=tk.LEFT)
 
-        # Frame for output folder selection
-        output_frame = ttk.Frame(self, padding="10")
+        # Output folder selection
+        output_frame = ttk.Frame(top_frame)
         output_frame.pack(fill=tk.X)
         ttk.Label(output_frame, text="Output Folder:").pack(side=tk.LEFT, padx=(0, 5))
-        # Make entry read-only? Or allow typing? For now, allow typing but browse is primary.
         ttk.Entry(output_frame, textvariable=self.output_folder_path, width=40).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=5)
-        # Ensure the button is created and packed correctly
         ttk.Button(output_frame, text="Browse...", command=self._select_output_folder).pack(side=tk.LEFT)
 
-        # Frame for format and generation
-        action_frame = ttk.Frame(self, padding="10")
-        action_frame.pack(fill=tk.X)
 
-        # Format selection
-        format_frame = ttk.Frame(action_frame)
-        format_frame.pack(side=tk.LEFT, padx=(0, 20))
-        ttk.Label(format_frame, text="Format:").pack(side=tk.LEFT, padx=(0, 5))
-        # Remove command linking to _update_output_extension
-        ttk.Radiobutton(format_frame, text="PNG", variable=self.output_format, value="png").pack(side=tk.LEFT)
-        ttk.Radiobutton(format_frame, text="SVG", variable=self.output_format, value="svg").pack(side=tk.LEFT)
+        # --- Middle Frame (Format / Templates) ---
+        middle_frame = ttk.Frame(self, padding="10")
+        middle_frame.pack(fill=tk.X, expand=True)
 
-        # Generate button
-        ttk.Button(action_frame, text="Generate Chart", command=self._generate_chart).pack(side=tk.RIGHT)
+        # Format selection (moved to left of middle frame)
+        format_frame = ttk.Frame(middle_frame)
+        format_frame.pack(side=tk.LEFT, padx=(0, 30)) # Add more padding to separate
+        ttk.Label(format_frame, text="Output Format:").pack(anchor=tk.W) # Anchor West
+        format_radio_frame = ttk.Frame(format_frame) # Frame for radios
+        format_radio_frame.pack(anchor=tk.W)
+        ttk.Radiobutton(format_radio_frame, text="PNG", variable=self.output_format, value="png").pack(side=tk.LEFT)
+        ttk.Radiobutton(format_radio_frame, text="SVG", variable=self.output_format, value="svg").pack(side=tk.LEFT)
 
-        # Status bar
-        status_bar = ttk.Frame(self, relief=tk.SUNKEN, padding="2 5")
-        status_bar.pack(side=tk.BOTTOM, fill=tk.X)
+        # Template download buttons (moved to right of middle frame)
+        template_frame = ttk.Frame(middle_frame)
+        template_frame.pack(side=tk.RIGHT)
+        ttk.Label(template_frame, text="Download Templates:").pack(anchor=tk.W)
+        template_button_frame = ttk.Frame(template_frame) # Frame for buttons
+        template_button_frame.pack(anchor=tk.W)
+        ttk.Button(template_button_frame, text="CSV", command=lambda: self._download_template('csv')).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(template_button_frame, text="Excel", command=lambda: self._download_template('xlsx')).pack(side=tk.LEFT)
+
+
+        # --- Bottom Frame (Generate Button / Status) ---
+        bottom_frame = ttk.Frame(self, padding="10")
+        bottom_frame.pack(fill=tk.X, side=tk.BOTTOM) # Pack at bottom
+
+        # Generate button (moved to bottom right)
+        ttk.Button(bottom_frame, text="Generate Chart", command=self._generate_chart).pack(side=tk.RIGHT)
+
+        # Status bar (moved to bottom left)
+        status_bar = ttk.Frame(bottom_frame, relief=tk.SUNKEN, padding="2 5")
+        status_bar.pack(side=tk.LEFT, fill=tk.X, expand=True) # Expand to fill space left of button
         ttk.Label(status_bar, textvariable=self.status_text).pack(side=tk.LEFT)
 
+
     def _select_input_file(self):
-        filetypes = (("CSV files", "*.csv"), ("All files", "*.*"))
-        filepath = filedialog.askopenfilename(title="Select Input CSV", filetypes=filetypes)
+        # Add Excel files to the selection dialog
+        filetypes = (
+            ("Spreadsheet files", "*.csv *.xlsx"),
+            ("CSV files", "*.csv"),
+            ("Excel files", "*.xlsx"),
+            ("All files", "*.*")
+            )
+        filepath = filedialog.askopenfilename(title="Select Input File (CSV or Excel)", filetypes=filetypes)
         if filepath:
             self.input_file_path.set(filepath)
             # Set default output folder to input file's directory
@@ -83,7 +109,6 @@ class GanttApp(tk.Tk):
             self.output_folder_path.set(input_dir)
             self.status_text.set("Input file selected. Output folder defaulted.")
 
-    # Remove _suggest_output_path and _update_output_extension methods
 
     def _select_output_folder(self):
         """Opens a dialog to select the output directory."""
@@ -99,6 +124,45 @@ class GanttApp(tk.Tk):
         if directory:
             self.output_folder_path.set(directory)
             self.status_text.set("Output folder selected.")
+
+
+    def _download_template(self, file_type: str):
+        """Handles downloading the template file."""
+        template_folder = project_root / "templates"
+        template_filename = f"template.{file_type}"
+        source_path = template_folder / template_filename
+
+        if not source_path.exists():
+            messagebox.showerror("Error", f"Template file not found:\n{source_path}")
+            self.status_text.set(f"Error: {template_filename} not found in templates folder.")
+            return
+
+        # Define file types for save dialog
+        if file_type == 'csv':
+            filetypes = (("CSV files", "*.csv"), ("All files", "*.*"))
+        elif file_type == 'xlsx':
+             filetypes = (("Excel files", "*.xlsx"), ("All files", "*.*"))
+        else:
+            filetypes = (("All files", "*.*"),) # Should not happen
+
+        # Open "Save As" dialog
+        save_path = filedialog.asksaveasfilename(
+            title=f"Save {file_type.upper()} Template As",
+            initialdir=str(Path.home() / "Downloads"), # Suggest Downloads folder
+            initialfile=template_filename,
+            defaultextension=f".{file_type}",
+            filetypes=filetypes
+        )
+
+        if save_path:
+            try:
+                shutil.copy2(source_path, save_path) # copy2 preserves metadata
+                self.status_text.set(f"{file_type.upper()} template saved.")
+                messagebox.showinfo("Success", f"Template saved to:\n{save_path}")
+            except Exception as e:
+                logger.error(f"Failed to copy template {source_path} to {save_path}: {e}", exc_info=True)
+                self.status_text.set(f"Error saving template: {e}")
+                messagebox.showerror("Error", f"Could not save template:\n{e}")
 
 
     def _generate_chart(self):

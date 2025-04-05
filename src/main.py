@@ -9,7 +9,8 @@ from datetime import datetime # Add datetime import
 project_root = Path(__file__).resolve().parent.parent # Go up two levels from src/main.py to mermaid_timeline_generator/
 sys.path.insert(0, str(project_root))
 
-from src.input_parser import parse_csv
+# Use the renamed parser function
+from src.input_parser import parse_input_file
 from src.timeline_logic import process_timeline_data
 from src.mermaid_generator import generate_mermaid_gantt
 from src.image_converter import save_mermaid_file, convert_mermaid_to_image
@@ -63,11 +64,12 @@ def generate_gantt_chart(input_path_str: str, output_path_str: str, image_format
         logger.error(f"Failed to create output directory '{output_dir}': {e}")
         return False
 
-    # --- 1. Parse CSV ---
+    # --- 1. Parse Input File ---
     logger.info(f"Parsing input file: {input_path}")
-    df = parse_csv(str(input_path))
+    # Call the renamed function
+    df = parse_input_file(str(input_path))
     if df is None:
-        logger.error("Failed to parse CSV file.")
+        logger.error("Failed to parse input file.")
         return False
     if df.empty:
         logger.warning("Parsed CSV is empty. No chart will be generated.")
@@ -123,9 +125,10 @@ def generate_gantt_chart(input_path_str: str, output_path_str: str, image_format
 
 def main_cli():
     """Handles Command Line Interface execution."""
-    parser = argparse.ArgumentParser(description="Generate a Mermaid Gantt chart image from a project timeline CSV.")
-    parser.add_argument("input_file", help="Path to the input CSV file.")
-    parser.add_argument("output_file", help="Path for the output image file (e.g., output/timeline.png or output/timeline.svg).")
+    parser = argparse.ArgumentParser(description="Generate a Mermaid Gantt chart image from a project timeline CSV or Excel file.")
+    # Update help text for input_file
+    parser.add_argument("input_file", help="Path to the input CSV or Excel (.xlsx) file.")
+    parser.add_argument("output_file", help="Path for the output image file (e.g., output/timeline.png or output/timeline.svg). Timestamp will be added automatically.")
     parser.add_argument("--format", choices=['png', 'svg'], default='png', help="Output image format (default: png).")
     # parser.add_argument("--title", help="Optional title for the Gantt chart (overrides filename derivation).") # Add later if needed
 
