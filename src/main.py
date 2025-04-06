@@ -34,17 +34,17 @@ def get_project_title_from_filename(filepath: str) -> str:
         logger.warning("Could not derive project title from filename. Using default.")
         return "Project Timeline"
 
-def generate_gantt_chart(input_path_str: str, output_path_str: str, image_format: str) -> bool:
+def generate_gantt_chart(input_path_str: str, output_path_str: str, image_format: str) -> str | None:
     """
-    Core logic to generate a Gantt chart image from a CSV file.
+    Core logic to generate a Gantt chart image from an input file.
 
     Args:
-        input_path_str: Path to the input CSV file.
-        output_path_str: Path for the output image file.
+        input_path_str: Path to the input CSV or Excel file.
+        output_path_str: Desired output image path (timestamp will be added).
         image_format: Output image format ('png' or 'svg').
 
     Returns:
-        True if successful, False otherwise.
+        The path to the successfully generated image file (including timestamp), or None if failed.
     """
     input_path = Path(input_path_str)
     output_path = Path(output_path_str)
@@ -54,7 +54,7 @@ def generate_gantt_chart(input_path_str: str, output_path_str: str, image_format
     expected_extension = f".{image_format}"
     if output_path.suffix.lower() != expected_extension:
         logger.error(f"Output file extension '{output_path.suffix}' does not match the specified format '{image_format}'. Please ensure the output filename ends with '{expected_extension}'.")
-        return False
+        return None # Return None on failure
 
     # Ensure output directory exists
     output_dir = output_path.parent
@@ -62,7 +62,7 @@ def generate_gantt_chart(input_path_str: str, output_path_str: str, image_format
         output_dir.mkdir(parents=True, exist_ok=True)
     except OSError as e:
         logger.error(f"Failed to create output directory '{output_dir}': {e}")
-        return False
+        return None # Return None on failure
 
     # --- 1. Parse Input File ---
     logger.info(f"Parsing input file: {input_path}")
@@ -70,17 +70,21 @@ def generate_gantt_chart(input_path_str: str, output_path_str: str, image_format
     df = parse_input_file(str(input_path))
     if df is None:
         logger.error("Failed to parse input file.")
-        return False
+        return None # Return None on failure
     if df.empty:
-        logger.warning("Parsed CSV is empty. No chart will be generated.")
-        return True # Considered success as there's no error, just nothing to do
+        logger.warning("Parsed input is empty. No chart will be generated.")
+        # Decide if empty input is an error or just nothing to do.
+        # Returning None indicates failure to generate *a chart*.
+        # If empty should be treated as success (e.g., in batch processing), adjust logic.
+        return None # Return None as no chart was generated
 
     # --- 2. Process Data ---
     logger.info("Processing timeline data...")
     processed_df = process_timeline_data(df)
     if processed_df.empty:
+        # This might happen if data is invalid after processing
         logger.error("Failed to process timeline data or data resulted in empty set.")
-        return False
+        return None # Return None on failure
 
     # --- 3. Generate Mermaid Syntax ---
     project_title = get_project_title_from_filename(str(input_path))
@@ -88,7 +92,7 @@ def generate_gantt_chart(input_path_str: str, output_path_str: str, image_format
     mermaid_string = generate_mermaid_gantt(processed_df, project_title)
     if not mermaid_string:
         logger.error("Failed to generate Mermaid syntax.")
-        return False
+        return None # Return None on failure
 
     # --- Generate Timestamped Filename ---
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -104,24 +108,27 @@ def generate_gantt_chart(input_path_str: str, output_path_str: str, image_format
     mmd_filepath = save_mermaid_file(mermaid_string, mmd_output_dir, timestamped_base_filename)
     if not mmd_filepath:
         logger.error("Failed to save .mmd file.")
-        return False
+        return None # Return None on failure
 
     # --- 5. Convert to Image (using timestamped output path) ---
     logger.info(f"Converting '{mmd_filepath}' to '{timestamped_output_path}' (Format: {image_format})...")
-    success = convert_mermaid_to_image(mmd_filepath, str(timestamped_output_path), image_format)
+    conversion_success = convert_mermaid_to_image(mmd_filepath, str(timestamped_output_path), image_format)
 
-    if success:
+    # Optional: Clean up the intermediate .mmd file regardless of conversion success?
+    # Or only on success? Let's keep it for debugging on failure for now.
+    if conversion_success:
         logger.info(f"Successfully generated timeline image: {timestamped_output_path}")
-        # Optional: Clean up the intermediate .mmd file
-        # try:
-        #     os.remove(mmd_filepath)
-        #     logger.info(f"Cleaned up intermediate file: {mmd_filepath}")
-        # except OSError as e:
-        #     logger.warning(f"Could not remove intermediate file '{mmd_filepath}': {e}")
-        return True
+        # Clean up the intermediate .mmd file on success
+        try:
+            os.remove(mmd_filepath)
+            logger.info(f"Cleaned up intermediate file: {mmd_filepath}")
+        except OSError as e:
+            logger.warning(f"Could not remove intermediate file '{mmd_filepath}': {e}")
+        return str(timestamped_output_path) # Return the path on success
     else:
         logger.error("Failed to convert Mermaid file to image. Please check Mermaid CLI installation and logs.")
-        return False
+        # Keep the .mmd file for debugging if conversion fails
+        return None # Return None on failure
 
 def main_cli():
     """Handles Command Line Interface execution."""

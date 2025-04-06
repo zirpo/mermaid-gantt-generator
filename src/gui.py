@@ -12,6 +12,7 @@ from tkinter import simpledialog # For simple input dialogs
 # Removed tkcalendar import
 from datetime import datetime # For date handling
 import calendar # For getting days in month
+from PIL import Image, ImageTk # For image preview
 
 # Adjust sys.path to import the refactored function
 project_root = Path(__file__).resolve().parent.parent
@@ -34,14 +35,20 @@ class GanttApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Mermaid Gantt Generator")
-        self.geometry("600x250") # Increased width
+        # Adjusted initial size for vertical layout
+        self.geometry("650x700")
 
         self.input_file_path = tk.StringVar()
-        # Change output_file_path to output_folder_path
         self.output_folder_path = tk.StringVar(value=str(project_root / "output")) # Default to ./output
         self.output_format = tk.StringVar(value="png") # Default to png
         self.status_text = tk.StringVar(value="Ready")
-        self.temp_file_path = None # To store the path of the temporary file
+        self.temp_file_path = None # To store the path of the temporary file used by editor
+
+        # Variables/Widgets for preview
+        self.preview_frame = None
+        self.preview_label = None
+        self.preview_image_tk = None # Keep reference to avoid garbage collection
+        self.last_generated_image_path = None # Store path of the generated image for preview
 
         self._create_widgets()
 
@@ -52,56 +59,10 @@ class GanttApp(tk.Tk):
         # For now, just opens it
 
     def _create_widgets(self):
-        # --- Top Frame (Input/Output Selection) ---
-        top_frame = ttk.Frame(self, padding="10")
-        top_frame.pack(fill=tk.X, expand=True)
-
-        # Input selection
-        input_frame = ttk.Frame(top_frame)
-        input_frame.pack(fill=tk.X, pady=(0, 5)) # Add padding below
-        ttk.Label(input_frame, text="Input File:").pack(side=tk.LEFT, padx=(0, 5)) # Changed label
-        ttk.Entry(input_frame, textvariable=self.input_file_path, width=40).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=5)
-        ttk.Button(input_frame, text="Browse...", command=self._select_input_file).pack(side=tk.LEFT)
-
-        # Output folder selection
-        output_frame = ttk.Frame(top_frame)
-        output_frame.pack(fill=tk.X)
-        ttk.Label(output_frame, text="Output Folder:").pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Entry(output_frame, textvariable=self.output_folder_path, width=40).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=5)
-        ttk.Button(output_frame, text="Browse...", command=self._select_output_folder).pack(side=tk.LEFT)
-
-
-        # --- Middle Frame (Format / Templates) ---
-        middle_frame = ttk.Frame(self, padding="10")
-        middle_frame.pack(fill=tk.X, expand=True)
-
-        # Format selection (moved to left of middle frame)
-        format_frame = ttk.Frame(middle_frame)
-        format_frame.pack(side=tk.LEFT, padx=(0, 30)) # Add more padding to separate
-        ttk.Label(format_frame, text="Output Format:").pack(anchor=tk.W) # Anchor West
-        format_radio_frame = ttk.Frame(format_frame) # Frame for radios
-        format_radio_frame.pack(anchor=tk.W)
-        ttk.Radiobutton(format_radio_frame, text="PNG", variable=self.output_format, value="png").pack(side=tk.LEFT)
-        ttk.Radiobutton(format_radio_frame, text="SVG", variable=self.output_format, value="svg").pack(side=tk.LEFT)
-
-        # Template download buttons (moved to right of middle frame)
-        template_frame = ttk.Frame(middle_frame)
-        template_frame.pack(side=tk.RIGHT)
-        ttk.Label(template_frame, text="Download Templates:").pack(anchor=tk.W)
-        template_button_frame = ttk.Frame(template_frame) # Frame for buttons
-        template_button_frame.pack(anchor=tk.W)
-        ttk.Button(template_button_frame, text="CSV", command=lambda: self._download_template('csv')).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(template_button_frame, text="Excel", command=lambda: self._download_template('xlsx')).pack(side=tk.LEFT)
-
-        # --- Editor Button ---
-        editor_button_frame = ttk.Frame(middle_frame)
-        editor_button_frame.pack(side=tk.LEFT, padx=(20, 0)) # Add padding to separate
-        ttk.Button(editor_button_frame, text="Create / Edit Data...", command=self._open_timeline_editor).pack()
-
-
         # --- Bottom Frame (Generate Button / Status) ---
+        # Define this first and pack it at the bottom of the root window
         bottom_frame = ttk.Frame(self, padding="10")
-        bottom_frame.pack(fill=tk.X, side=tk.BOTTOM) # Pack at bottom
+        bottom_frame.pack(fill=tk.X, side=tk.BOTTOM) # Pack at bottom of root window
 
         # Generate button (moved to bottom right)
         ttk.Button(bottom_frame, text="Generate Chart", command=self._generate_chart).pack(side=tk.RIGHT)
@@ -110,6 +71,73 @@ class GanttApp(tk.Tk):
         status_bar = ttk.Frame(bottom_frame, relief=tk.SUNKEN, padding="2 5")
         status_bar.pack(side=tk.LEFT, fill=tk.X, expand=True) # Expand to fill space left of button
         ttk.Label(status_bar, textvariable=self.status_text).pack(side=tk.LEFT)
+
+        # --- Main Content Frame (Above Bottom Frame) ---
+        # This frame will hold the PanedWindow
+        main_content_frame = ttk.Frame(self)
+        main_content_frame.pack(fill=tk.BOTH, expand=True, side=tk.TOP) # Fill remaining space
+
+        # --- Main Paned Window (Splits Controls and Preview Vertically) ---
+        main_pane = tk.PanedWindow(main_content_frame, orient=tk.VERTICAL, sashrelief=tk.RAISED)
+        main_pane.pack(fill=tk.BOTH, expand=True)
+
+        # --- Top Pane (Controls) ---
+        controls_frame = ttk.Frame(main_pane, padding="10")
+        main_pane.add(controls_frame, height=200) # Add controls frame to the top pane with initial height
+
+        # --- Top Section (Input/Output Selection) ---
+        top_section_frame = ttk.Frame(controls_frame)
+        top_section_frame.pack(fill=tk.X, expand=False, pady=(0,10)) # Don't expand vertically
+
+        # Input selection
+        input_frame = ttk.Frame(top_section_frame)
+        input_frame.pack(fill=tk.X, pady=(0, 5)) # Add padding below
+        ttk.Label(input_frame, text="Input File:").pack(side=tk.LEFT, padx=(0, 5)) # Changed label
+        ttk.Entry(input_frame, textvariable=self.input_file_path, width=40).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=5)
+        ttk.Button(input_frame, text="Browse...", command=self._select_input_file).pack(side=tk.LEFT)
+
+        # Output folder selection
+        output_frame = ttk.Frame(top_section_frame)
+        output_frame.pack(fill=tk.X)
+        ttk.Label(output_frame, text="Output Folder:").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Entry(output_frame, textvariable=self.output_folder_path, width=40).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=5)
+        ttk.Button(output_frame, text="Browse...", command=self._select_output_folder).pack(side=tk.LEFT)
+
+
+        # --- Middle Section (Format / Templates / Editor) ---
+        middle_section_frame = ttk.Frame(controls_frame)
+        middle_section_frame.pack(fill=tk.X, expand=False, pady=(0,10)) # Don't expand vertically
+
+        # Format selection (moved to left of middle frame)
+        format_frame = ttk.Frame(middle_section_frame)
+        format_frame.pack(side=tk.LEFT, padx=(0, 30)) # Add more padding to separate
+        ttk.Label(format_frame, text="Output Format:").pack(anchor=tk.W) # Anchor West
+        format_radio_frame = ttk.Frame(format_frame) # Frame for radios
+        format_radio_frame.pack(anchor=tk.W)
+        ttk.Radiobutton(format_radio_frame, text="PNG", variable=self.output_format, value="png").pack(side=tk.LEFT)
+        ttk.Radiobutton(format_radio_frame, text="SVG", variable=self.output_format, value="svg").pack(side=tk.LEFT)
+
+        # Editor Button (Center)
+        editor_button_frame = ttk.Frame(middle_section_frame)
+        editor_button_frame.pack(side=tk.LEFT, padx=(20, 20)) # Add padding
+        ttk.Button(editor_button_frame, text="Create / Edit Data...", command=self._open_timeline_editor).pack()
+
+        # Template download buttons (moved to right of middle frame)
+        template_frame = ttk.Frame(middle_section_frame)
+        template_frame.pack(side=tk.LEFT) # Pack left after editor button
+        ttk.Label(template_frame, text="Download Templates:").pack(anchor=tk.W)
+        template_button_frame = ttk.Frame(template_frame) # Frame for buttons
+        template_button_frame.pack(anchor=tk.W)
+        ttk.Button(template_button_frame, text="CSV", command=lambda: self._download_template('csv')).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(template_button_frame, text="Excel", command=lambda: self._download_template('xlsx')).pack(side=tk.LEFT)
+
+        # --- Bottom Pane (Preview) ---
+        self.preview_frame = ttk.Frame(main_pane, padding="10", relief=tk.SUNKEN)
+        main_pane.add(self.preview_frame) # Add preview frame to the bottom pane
+
+        # Label to display the image
+        self.preview_label = ttk.Label(self.preview_frame, text="Chart preview will appear here.", anchor=tk.CENTER)
+        self.preview_label.pack(fill=tk.BOTH, expand=True)
 
 
     def _select_input_file(self):
@@ -183,11 +211,58 @@ class GanttApp(tk.Tk):
                 self.status_text.set(f"Error saving template: {e}")
                 messagebox.showerror("Error", f"Could not save template:\n{e}")
 
+    def _update_preview(self, image_path=None):
+        """Updates the preview pane with the image or clears it."""
+        try:
+            # Clear previous image first
+            if self.preview_image_tk:
+                self.preview_label.config(image='')
+                self.preview_image_tk = None
+
+            if image_path and os.path.exists(image_path):
+                # Open the image using Pillow
+                img = Image.open(image_path)
+
+                # --- Resize image to fit the preview pane (optional but recommended) ---
+                # Get preview pane size (might need to update geometry first)
+                self.preview_frame.update_idletasks()
+                pane_width = self.preview_frame.winfo_width() - 20 # Subtract padding
+                pane_height = self.preview_frame.winfo_height() - 20 # Subtract padding
+
+                if pane_width > 1 and pane_height > 1: # Ensure valid dimensions
+                    img_width, img_height = img.size
+                    # Calculate aspect ratio
+                    ratio = min(pane_width / img_width, pane_height / img_height)
+                    if ratio < 1: # Only downscale, don't upscale
+                        new_width = int(img_width * ratio)
+                        new_height = int(img_height * ratio)
+                        img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+
+                # Convert to Tkinter PhotoImage
+                self.preview_image_tk = ImageTk.PhotoImage(img)
+                self.preview_label.config(image=self.preview_image_tk, text="") # Display image, clear text
+                self.status_text.set("Chart generated and preview updated.")
+            else:
+                # Clear preview if no image path or path invalid
+                self.preview_label.config(image='', text="Chart preview will appear here.")
+                if image_path is None: # Only update status if clearing intentionally
+                     self.status_text.set("Preview cleared.")
+
+        except Exception as e:
+            logger.error(f"Failed to update preview with image {image_path}: {e}", exc_info=True)
+            self.preview_label.config(image='', text=f"Error loading preview:\n{e}")
+            self.status_text.set("Error loading preview.")
+
 
     def _generate_chart(self):
         input_file = self.input_file_path.get()
         output_folder = self.output_folder_path.get()
         img_format = self.output_format.get()
+        temp_preview_png = None # Path for temporary PNG if SVG is chosen
+
+        # Clear previous preview immediately
+        self._update_preview(None)
+        self.last_generated_image_path = None
 
         if not input_file or not output_folder:
             messagebox.showerror("Error", "Please select an input file and an output folder.")
@@ -201,42 +276,79 @@ class GanttApp(tk.Tk):
              return
 
         # Construct the target output path (without timestamp)
-        # The core function will add the timestamp internally
         input_p = Path(input_file)
         output_p = Path(output_folder)
-        target_filename = f"{input_p.stem}.{img_format}"
-        target_output_path = str(output_p / target_filename)
+        target_filename_base = input_p.stem # Base name without extension
+        target_output_path = str(output_p / f"{target_filename_base}.{img_format}")
 
         self.status_text.set("Generating chart...")
         self.update_idletasks() # Update GUI to show status
 
+        generated_image_path = None
         try:
-            # Call the refactored core logic function with the target path
-            success = generate_gantt_chart(input_file, target_output_path, img_format)
+            # Call the updated core logic function
+            generated_image_path = generate_gantt_chart(input_file, target_output_path, img_format)
 
-            if success:
-                # Note: We don't know the exact final filename with timestamp here easily
-                # unless generate_gantt_chart returns it. For now, just confirm success.
-                self.status_text.set(f"Chart successfully generated in folder: {output_folder}")
-                messagebox.showinfo("Success", f"Gantt chart saved with timestamp in:\n{output_folder}")
+            if generated_image_path:
+                self.last_generated_image_path = generated_image_path
+                self.status_text.set(f"Chart successfully generated: {os.path.basename(generated_image_path)}")
+                messagebox.showinfo("Success", f"Gantt chart saved as:\n{generated_image_path}")
+
+                # --- Handle Preview ---
+                preview_image_to_load = generated_image_path
+                if img_format == 'svg':
+                    # If SVG, generate a temporary PNG for preview
+                    png_preview_path = str(output_p / f"{Path(generated_image_path).stem}_preview.png")
+                    logger.info(f"Generating temporary PNG preview for SVG: {png_preview_path}")
+                    # Need the mmd path - generate_gantt_chart doesn't return it anymore.
+                    # Re-generate mmd or modify generate_gantt_chart again?
+                    # Quick fix: Re-run parts of generate_gantt_chart logic here (less ideal)
+                    # Let's assume for now we need to modify generate_gantt_chart to optionally keep mmd
+                    # OR: Modify image_converter to accept mermaid string directly?
+                    # --- Simpler approach: Call generate_gantt_chart again for PNG ---
+                    temp_preview_png_path_obj = Path(tempfile.gettempdir()) / f"{target_filename_base}_preview_{datetime.now().strftime('%Y%m%d%H%M%S')}.png"
+                    temp_preview_png = str(temp_preview_png_path_obj)
+                    logger.info(f"Generating temporary PNG preview at: {temp_preview_png}")
+                    # Call generate_gantt_chart again, but outputting PNG to temp location
+                    preview_png_success_path = generate_gantt_chart(input_file, temp_preview_png, 'png')
+                    if preview_png_success_path:
+                         preview_image_to_load = preview_png_success_path
+                         temp_preview_png = preview_png_success_path # Store path for cleanup
+                    else:
+                         logger.error("Failed to generate temporary PNG for SVG preview.")
+                         preview_image_to_load = None # Cannot show preview
+
+                # Update the preview pane
+                self._update_preview(preview_image_to_load)
+
             else:
-                # Error messages should be logged by generate_gantt_chart
+                # Error messages logged by generate_gantt_chart
                 self.status_text.set("Generation failed. Check logs.")
                 messagebox.showerror("Error", "Failed to generate Gantt chart. Please check the console/logs for details.")
+                self._update_preview(None) # Clear preview on failure
 
         except Exception as e:
             logger.error(f"An unexpected error occurred in the GUI: {e}", exc_info=True)
             self.status_text.set(f"An unexpected error occurred: {e}")
             messagebox.showerror("Unexpected Error", f"An error occurred:\n{e}")
+            self._update_preview(None) # Clear preview on error
         finally:
-            # --- Cleanup Temporary File ---
+            # --- Cleanup Temporary Files ---
+            # Editor temp file
             if self.temp_file_path and os.path.exists(self.temp_file_path):
                 try:
                     os.remove(self.temp_file_path)
-                    logger.info(f"Cleaned up temporary file: {self.temp_file_path}")
+                    logger.info(f"Cleaned up editor temporary file: {self.temp_file_path}")
                     self.temp_file_path = None # Reset path
                 except OSError as e:
-                    logger.warning(f"Could not remove temporary file '{self.temp_file_path}': {e}")
+                    logger.warning(f"Could not remove editor temporary file '{self.temp_file_path}': {e}")
+            # Preview temp file (if created for SVG)
+            if temp_preview_png and os.path.exists(temp_preview_png):
+                 try:
+                     os.remove(temp_preview_png)
+                     logger.info(f"Cleaned up temporary preview PNG: {temp_preview_png}")
+                 except OSError as e:
+                     logger.warning(f"Could not remove temporary preview file '{temp_preview_png}': {e}")
 
 
 # Placeholder for the new Editor Window Class

@@ -105,7 +105,7 @@ This will open a window where you can:
         *   The main window's "Input File" and "Output Folder" paths are updated to this newly saved file.
 *   Click "Generate Chart".
 
-The GUI will use the currently selected "Input File" (which might be the one you just saved from the editor) and save the generated chart image (with a timestamp) in the currently selected "Output Folder" (which is also updated after saving from the editor).
+The GUI will use the currently selected "Input File" (which might be the one you just saved from the editor) and save the generated chart image (with a timestamp) in the currently selected "Output Folder" (which is also updated after saving from the editor). A preview of the generated chart (as a PNG) will appear in the pane below the controls.
 
 ## Input CSV Format
 

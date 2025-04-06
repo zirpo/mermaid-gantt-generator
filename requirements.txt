@@ -1,3 +1,4 @@
 pandas
 pytest
 openpyxl
+Pillow>=9.0 # For image preview in GUI
