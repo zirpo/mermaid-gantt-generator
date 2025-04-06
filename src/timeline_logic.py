@@ -12,30 +12,37 @@ def calculate_duration(start_date: pd.Timestamp, end_date: pd.Timestamp) -> int:
 
 def get_task_status(percent_complete: float | None) -> str:
     """Determines the Mermaid status tag based on completion percentage."""
+    # Treat None, NaN, or 0% as 'active' for simplicity in Gantt
     if percent_complete is None or pd.isna(percent_complete) or percent_complete <= 0:
-        return "" # Default/Not started - Mermaid doesn't have a specific tag, empty implies default
+        return "active"
     elif percent_complete >= 100:
         return "done"
-    elif percent_complete > 0:
+    elif percent_complete > 0: # Covers > 0 and < 100
         return "active"
-    else:
-        return "" # Should not happen with cleaning, but default case
+    else: # Should technically not be reached if <= 0 is active
+        return "active"
 
 def calculate_end_date(start_date: pd.Timestamp, working_days: int | float | None) -> pd.Timestamp:
     """
     Calculates the end date by adding working days (Mon-Fri) to the start date.
     Note: The start date itself counts as the first working day if it's a business day.
+    Returns start_date if working_days is invalid (None, NaN, <= 0).
     """
-    if pd.isna(start_date) or pd.isna(working_days) or working_days <= 0:
-        return pd.NaT # Return Not-a-Time for invalid inputs
-
-    # Ensure working_days is an integer
+    # Return start_date for invalid inputs instead of NaT
+    if pd.isna(start_date) or pd.isna(working_days):
+        return start_date
+    
+    # Ensure working_days is an integer, handle potential float input
     try:
-        wd_int = int(working_days)
-        if wd_int <= 0: # Double check after int conversion
-             return pd.NaT
+        # Use floor to handle potential float inputs like 3.7 days -> 3 days
+        wd_int = int(working_days) 
     except (ValueError, TypeError):
-        return pd.NaT
+         # If conversion fails, treat as invalid duration
+        return start_date
+
+    # If duration is 0 or less after conversion, return start date
+    if wd_int <= 0:
+        return start_date
 
     # BusinessDay(n) adds n business days. If start_date is a business day,
     # adding (n-1) business days gives the correct end date for an n-day task.
@@ -46,12 +53,10 @@ def calculate_end_date(start_date: pd.Timestamp, working_days: int | float | Non
     # Example: Start Mon, 2 working days -> End Tue (Mon + BDay(1))
     # Example: Start Fri, 3 working days -> End Tue (Fri + BDay(2))
     # Example: Start Sat, 1 working day -> End Mon (Sat rolls to Mon, Mon + BDay(0))
-    if wd_int > 0:
-        # Subtract 1 day from the count because the start day is included
-        # Apply the offset
-        return start_date + BusinessDay(wd_int - 1)
-    else:
-        return pd.NaT # Should be caught earlier, but safety check
+    # BusinessDay calculation remains the same for wd_int > 0
+    # Subtract 1 day from the count because the start day is included
+    # Apply the offset
+    return start_date + BusinessDay(wd_int - 1)
 
 
 def process_timeline_data(df: pd.DataFrame) -> pd.DataFrame:
@@ -73,6 +78,46 @@ def process_timeline_data(df: pd.DataFrame) -> pd.DataFrame:
     processed_tasks = []
     milestones_to_add = []
 
+    # --- Ensure required columns exist ---
+    required_cols = ['WorkStream', 'WorkPackage', 'Start']
+    missing_req_cols = [col for col in required_cols if col not in df.columns]
+    if missing_req_cols:
+        logging.error(f"Input data missing required columns: {missing_req_cols}. Cannot process.")
+        return pd.DataFrame()
+
+    # --- Ensure optional columns exist with defaults if missing ---
+    # This prevents KeyErrors later when accessing them
+    if 'End' not in df.columns:
+        df['End'] = pd.NaT
+    if 'WorkingDays' not in df.columns:
+        df['WorkingDays'] = pd.NA # Use pandas NA for numeric missing
+    if 'PercentComplete' not in df.columns:
+        df['PercentComplete'] = pd.NA # Use pandas NA
+    if 'IsMilestone' not in df.columns:
+        df['IsMilestone'] = False # Default to False
+    if 'MilestoneGroup' not in df.columns:
+        df['MilestoneGroup'] = '' # Default to empty string
+
+    # --- Convert types and handle errors early ---
+    df['Start'] = pd.to_datetime(df['Start'], errors='coerce')
+    df['End'] = pd.to_datetime(df['End'], errors='coerce')
+    df['WorkingDays'] = pd.to_numeric(df['WorkingDays'], errors='coerce')
+    df['PercentComplete'] = pd.to_numeric(df['PercentComplete'], errors='coerce')
+    # Convert boolean-like values for IsMilestone
+    df['IsMilestone'] = df['IsMilestone'].replace({
+             'True': True, 'False': False, 'yes': True, 'no': False,
+             '1': True, '0': False, 1: True, 0: False,
+             True: True, False: False # Handle actual booleans too
+         }).fillna(False).astype(bool) # Fill NA with False and ensure boolean type
+    df['MilestoneGroup'] = df['MilestoneGroup'].fillna('').astype(str) # Fill NA with empty string
+
+    # Drop rows where Start date is invalid after conversion
+    invalid_start_rows = df[df['Start'].isna()].index
+    if not invalid_start_rows.empty:
+        logging.warning(f"Dropping rows {invalid_start_rows.tolist()} due to invalid 'Start' date.")
+        df.drop(index=invalid_start_rows, inplace=True)
+        if df.empty: return pd.DataFrame() # Return if all rows dropped
+
     # --- Calculate End Date if WorkingDays is provided ---
     # Identify rows where End is missing but WorkingDays is present and valid
     needs_end_date_calc = df['End'].isna() & df['WorkingDays'].notna() & (df['WorkingDays'] > 0)
@@ -85,99 +130,111 @@ def process_timeline_data(df: pd.DataFrame) -> pd.DataFrame:
         # Ensure the 'End' column remains datetime type after updates
         df['End'] = pd.to_datetime(df['End'], errors='coerce')
 
-        # Check if any calculations failed (resulted in NaT)
+        # Check if any calculations resulted in the End date still being NaT (e.g., if calculate_end_date returned start_date due to invalid WD)
+        # We might not need to drop these, just ensure they are handled later (e.g., duration calculation)
         failed_calc = needs_end_date_calc & df['End'].isna()
         if failed_calc.any():
-            failed_rows = df[failed_calc].index.tolist()
-            logging.error(f"Failed to calculate End date for rows: {failed_rows}. Please check Start date and WorkingDays values.")
-            # Option: Drop these rows or return None
-            logging.warning(f"Dropping rows {failed_rows} due to failed End date calculation.")
-            df.drop(index=failed_rows, inplace=True)
-
+             failed_indices = df[failed_calc].index.tolist()
+             logging.warning(f"End date could not be calculated for rows: {failed_indices}. 'End' remains NaT.")
+             # Don't drop, let duration calculation handle NaT End date
 
     # --- Calculate Duration (Calendar Days) and Status ---
-    # Now that 'End' is populated (either originally or calculated), calculate calendar duration
+    # Ensure 'End' is set to 'Start' if it's still NaT after potential calculation
+    # This ensures duration calculation doesn't fail for rows where only Start was given
+    df['End'] = df['End'].fillna(df['Start'])
+
     df['Duration'] = df.apply(lambda row: calculate_duration(row['Start'], row['End']), axis=1)
     df['Status'] = df['PercentComplete'].apply(get_task_status)
 
     # --- Identify Explicit Milestones ---
-    # Explicit milestones logic remains largely the same, relying on Start/End
     explicit_milestones = df[df['IsMilestone'] == True].copy()
     for index, row in explicit_milestones.iterrows():
         # Explicit milestones use their own 'End' date as the milestone date
         milestone_date = row['End']
+        # If End date is NaT (was missing or invalid), use Start date
         if pd.isna(milestone_date):
-             # If End date is missing for an explicit milestone, try Start date
              milestone_date = row['Start']
+        # If Start date was also invalid (already dropped), this row wouldn't exist here.
+        # But double-check milestone_date validity before adding.
         if pd.isna(milestone_date):
-             # Updated: Use WorkPackage in log message
-            logging.warning(f"Explicit milestone '{row['WorkPackage']}' has no valid Start or End date. Skipping.")
+            logging.warning(f"Explicit milestone '{row['WorkPackage']}' has no valid date (Start or End). Skipping.")
             continue
 
         milestones_to_add.append({
-            'WorkPackage': row['WorkPackage'], # Updated: Use WorkPackage name from the milestone row
-            'IsGeneratedMilestone': True, # Flag to distinguish from regular tasks
+            'WorkPackage': row['WorkPackage'],
+            'IsGeneratedMilestone': True,
             'MilestoneDate': milestone_date.strftime('%Y-%m-%d'),
-            'WorkStream': row['WorkStream'] # Keep WorkStream for potential sectioning
+            'WorkStream': row['WorkStream']
         })
+        # Set status for the original row in df to 'milestone' for filtering later
+        df.loc[index, 'Status'] = 'milestone'
+
 
     # --- Identify Grouped Milestones ---
     # Filter out explicit milestone rows and rows not part of any group
     # Ensure 'End' date exists before checking completion for grouped milestones
     workpackage_df = df[(df['IsMilestone'] == False) & (df['MilestoneGroup'] != '') & df['End'].notna()].copy()
-    grouped = workpackage_df.groupby('MilestoneGroup')
 
-    for name, group in grouped:
-        all_complete = group['PercentComplete'].min() >= 100 # Check if all WorkPackages in the group are 100%
-        if all_complete:
-            latest_end_date = group['End'].max()
-            if pd.isna(latest_end_date):
-                 # Updated: Log message refers to WorkPackages
-                 logging.warning(f"Grouped milestone '{name}' has WorkPackages with missing end dates. Cannot determine milestone date. Skipping.")
+    if not workpackage_df.empty:
+        grouped = workpackage_df.groupby('MilestoneGroup')
+        for name, group in grouped:
+            # Ensure PercentComplete is not NaN before checking min()
+            if group['PercentComplete'].isna().any():
+                 logging.info(f"Grouped milestone '{name}' skipped: contains tasks with missing completion status.")
                  continue
 
-            # Use the MilestoneGroup name as the milestone name
-            milestones_to_add.append({
-                'WorkPackage': name, # Updated: Use MilestoneGroup name as the WorkPackage name for the milestone entry
-                'IsGeneratedMilestone': True,
-                'MilestoneDate': latest_end_date.strftime('%Y-%m-%d'),
-                # Try to get a representative WorkStream, e.g., from the first WorkPackage in the group
-                'WorkStream': group['WorkStream'].iloc[0] if not group.empty else 'Milestones'
-            })
-        else:
-             # Updated: Log message refers to WorkPackages
-            logging.info(f"Grouped milestone '{name}' condition not met (not all WorkPackages 100% complete).")
+            all_complete = group['PercentComplete'].min() >= 100
+            if all_complete:
+                latest_end_date = group['End'].max()
+                # latest_end_date should be valid here because we filtered for End.notna()
+                if pd.isna(latest_end_date):
+                     logging.error(f"Unexpected NaT end date for completed grouped milestone '{name}'. Skipping.") # Should not happen
+                     continue
+
+                milestones_to_add.append({
+                    'WorkPackage': name,
+                    'IsGeneratedMilestone': True,
+                    'MilestoneDate': latest_end_date.strftime('%Y-%m-%d'),
+                    'WorkStream': group['WorkStream'].iloc[0] if not group.empty else 'Milestones'
+                })
+            else:
+                logging.info(f"Grouped milestone '{name}' condition not met (not all WorkPackages 100% complete).")
 
 
     # --- Combine regular WorkPackages and milestones ---
     # Select columns needed for Mermaid generation for regular WorkPackages
-    # Filter out rows that were ONLY defined as explicit milestones
+    # Filter out rows that were defined as explicit milestones (using the status we set)
     # Ensure Start and Duration are valid before including
-    # Updated: Select WorkPackage instead of Task
     regular_wp_df = df[
-        (df['IsMilestone'] == False) &
-        df['Start'].notna() & # Ensure Start date is valid
-        df['Duration'].notna() & (df['Duration'] > 0) # Ensure Duration is calculated and positive
+        (df['Status'] != 'milestone') & # Filter out rows marked as explicit milestones
+        df['Start'].notna() &
+        df['Duration'].notna() & (df['Duration'] > 0)
     ][['WorkStream', 'WorkPackage', 'Status', 'Start', 'Duration']].copy()
-    regular_wp_df['Start'] = regular_wp_df['Start'].dt.strftime('%Y-%m-%d') # Format date
-    regular_wp_df['IsGeneratedMilestone'] = False # Add flag
 
-    # Create DataFrame for generated milestones (using WorkPackage column now)
+    if not regular_wp_df.empty:
+        regular_wp_df['Start'] = regular_wp_df['Start'].dt.strftime('%Y-%m-%d') # Format date
+        regular_wp_df['IsGeneratedMilestone'] = False # Add flag
+
+    # Create DataFrame for generated milestones
     milestones_df = pd.DataFrame(milestones_to_add)
     if not milestones_df.empty:
-        # Add placeholder columns needed for concatenation if milestones exist
         milestones_df['Status'] = 'milestone'
-        milestones_df['Start'] = milestones_df['MilestoneDate'] # Use milestone date as 'Start' for sorting/consistency
+        milestones_df['Start'] = milestones_df['MilestoneDate']
         milestones_df['Duration'] = 0 # Milestones have 0 duration in Mermaid syntax
+        milestones_df['IsGeneratedMilestone'] = True # Ensure flag is set
 
     # Concatenate regular WorkPackages and generated milestones
-    # Updated: Concatenate regular_wp_df
     final_df = pd.concat([regular_wp_df, milestones_df], ignore_index=True)
+
+    if final_df.empty:
+         logging.warning("No valid tasks or milestones found after processing.")
+         return pd.DataFrame()
 
     # Sort potentially by WorkStream then Start date for better organization in Mermaid
     # Convert 'Start' back to datetime for proper sorting if needed, handle potential errors
     final_df['SortDate'] = pd.to_datetime(final_df['Start'], errors='coerce')
-    final_df = final_df.sort_values(by=['WorkStream', 'SortDate']).drop(columns=['SortDate'])
+    # Handle potential NaT in SortDate if Start date string was somehow invalid
+    final_df = final_df.sort_values(by=['WorkStream', 'SortDate'], na_position='last').drop(columns=['SortDate'])
 
 
     logging.info("Timeline data processed successfully.")

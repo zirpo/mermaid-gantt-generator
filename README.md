@@ -127,8 +127,10 @@ See `templates/template.csv` or `templates/template.xlsx` (downloadable via GUI)
 
 ## Testing
 
-(Test suite implementation using `pytest` is planned but not yet included in this initial version).
+A test suite using `pytest` is included to verify the core functionality. Currently, tests cover the `src/timeline_logic.py` module.
 
-To run tests (once implemented):
+To run the tests:
 ```bash
-pytest tests/
+pytest
+# Or specifically target the logic tests:
+# pytest tests/test_timeline_logic.py
