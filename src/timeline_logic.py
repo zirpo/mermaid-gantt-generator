@@ -1,6 +1,7 @@
 import pandas as pd
 import logging
 from datetime import timedelta
+from pandas.tseries.offsets import BusinessDay # Import BusinessDay
 
 def calculate_duration(start_date: pd.Timestamp, end_date: pd.Timestamp) -> int:
     """Calculates the duration between two dates in days (inclusive)."""
@@ -20,9 +21,43 @@ def get_task_status(percent_complete: float | None) -> str:
     else:
         return "" # Should not happen with cleaning, but default case
 
+def calculate_end_date(start_date: pd.Timestamp, working_days: int | float | None) -> pd.Timestamp:
+    """
+    Calculates the end date by adding working days (Mon-Fri) to the start date.
+    Note: The start date itself counts as the first working day if it's a business day.
+    """
+    if pd.isna(start_date) or pd.isna(working_days) or working_days <= 0:
+        return pd.NaT # Return Not-a-Time for invalid inputs
+
+    # Ensure working_days is an integer
+    try:
+        wd_int = int(working_days)
+        if wd_int <= 0: # Double check after int conversion
+             return pd.NaT
+    except (ValueError, TypeError):
+        return pd.NaT
+
+    # BusinessDay(n) adds n business days. If start_date is a business day,
+    # adding (n-1) business days gives the correct end date for an n-day task.
+    # If start_date is NOT a business day, BusinessDay() rolls forward to the next
+    # business day automatically before adding days.
+    # We subtract 1 because the duration includes the start day.
+    # Example: Start Mon, 1 working day -> End Mon (Mon + BDay(0))
+    # Example: Start Mon, 2 working days -> End Tue (Mon + BDay(1))
+    # Example: Start Fri, 3 working days -> End Tue (Fri + BDay(2))
+    # Example: Start Sat, 1 working day -> End Mon (Sat rolls to Mon, Mon + BDay(0))
+    if wd_int > 0:
+        # Subtract 1 day from the count because the start day is included
+        # Apply the offset
+        return start_date + BusinessDay(wd_int - 1)
+    else:
+        return pd.NaT # Should be caught earlier, but safety check
+
+
 def process_timeline_data(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Processes the parsed DataFrame to calculate durations, statuses,
+    Processes the parsed DataFrame to calculate end dates (if using working days),
+    durations, statuses,
     and identify/calculate milestones.
 
     Args:
@@ -38,11 +73,35 @@ def process_timeline_data(df: pd.DataFrame) -> pd.DataFrame:
     processed_tasks = []
     milestones_to_add = []
 
-    # --- Calculate Duration and Status for regular tasks ---
+    # --- Calculate End Date if WorkingDays is provided ---
+    # Identify rows where End is missing but WorkingDays is present and valid
+    needs_end_date_calc = df['End'].isna() & df['WorkingDays'].notna() & (df['WorkingDays'] > 0)
+
+    if needs_end_date_calc.any():
+        logging.info(f"Calculating End dates for {needs_end_date_calc.sum()} rows based on 'WorkingDays'.")
+        df.loc[needs_end_date_calc, 'End'] = df.loc[needs_end_date_calc].apply(
+            lambda row: calculate_end_date(row['Start'], row['WorkingDays']), axis=1
+        )
+        # Ensure the 'End' column remains datetime type after updates
+        df['End'] = pd.to_datetime(df['End'], errors='coerce')
+
+        # Check if any calculations failed (resulted in NaT)
+        failed_calc = needs_end_date_calc & df['End'].isna()
+        if failed_calc.any():
+            failed_rows = df[failed_calc].index.tolist()
+            logging.error(f"Failed to calculate End date for rows: {failed_rows}. Please check Start date and WorkingDays values.")
+            # Option: Drop these rows or return None
+            logging.warning(f"Dropping rows {failed_rows} due to failed End date calculation.")
+            df.drop(index=failed_rows, inplace=True)
+
+
+    # --- Calculate Duration (Calendar Days) and Status ---
+    # Now that 'End' is populated (either originally or calculated), calculate calendar duration
     df['Duration'] = df.apply(lambda row: calculate_duration(row['Start'], row['End']), axis=1)
     df['Status'] = df['PercentComplete'].apply(get_task_status)
 
     # --- Identify Explicit Milestones ---
+    # Explicit milestones logic remains largely the same, relying on Start/End
     explicit_milestones = df[df['IsMilestone'] == True].copy()
     for index, row in explicit_milestones.iterrows():
         # Explicit milestones use their own 'End' date as the milestone date
@@ -64,8 +123,8 @@ def process_timeline_data(df: pd.DataFrame) -> pd.DataFrame:
 
     # --- Identify Grouped Milestones ---
     # Filter out explicit milestone rows and rows not part of any group
-    # Updated: Still group by MilestoneGroup, but process WorkPackages within
-    workpackage_df = df[(df['IsMilestone'] == False) & (df['MilestoneGroup'] != '')].copy()
+    # Ensure 'End' date exists before checking completion for grouped milestones
+    workpackage_df = df[(df['IsMilestone'] == False) & (df['MilestoneGroup'] != '') & df['End'].notna()].copy()
     grouped = workpackage_df.groupby('MilestoneGroup')
 
     for name, group in grouped:
@@ -93,8 +152,13 @@ def process_timeline_data(df: pd.DataFrame) -> pd.DataFrame:
     # --- Combine regular WorkPackages and milestones ---
     # Select columns needed for Mermaid generation for regular WorkPackages
     # Filter out rows that were ONLY defined as explicit milestones
+    # Ensure Start and Duration are valid before including
     # Updated: Select WorkPackage instead of Task
-    regular_wp_df = df[df['IsMilestone'] == False][['WorkStream', 'WorkPackage', 'Status', 'Start', 'Duration']].copy()
+    regular_wp_df = df[
+        (df['IsMilestone'] == False) &
+        df['Start'].notna() & # Ensure Start date is valid
+        df['Duration'].notna() & (df['Duration'] > 0) # Ensure Duration is calculated and positive
+    ][['WorkStream', 'WorkPackage', 'Status', 'Start', 'Duration']].copy()
     regular_wp_df['Start'] = regular_wp_df['Start'].dt.strftime('%Y-%m-%d') # Format date
     regular_wp_df['IsGeneratedMilestone'] = False # Add flag
 

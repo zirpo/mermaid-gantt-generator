@@ -93,9 +93,19 @@ This will open a window where you can:
 *   Browse to select the output folder where the generated image will be saved (defaults to the input file's folder).
 *   Choose the output format (PNG or SVG).
 *   Optionally, download template files (`template.csv` or `template.xlsx`) to see the required format.
+*   Click "Create / Edit Data..." to open an editor:
+    *   If an input file is selected, its data will be loaded into the editor.
+    *   If no input file is selected, the editor starts empty.
+    *   You can add/edit/delete WorkStreams and WorkPackages.
+    *   You can specify duration using either "End Date" or "Working Days".
+    *   Clicking "OK / Use This Data" will prompt you to save the data as a CSV file:
+        *   If editing loaded data, it defaults to saving a timestamped version (e.g., `original_YYYYMMDD_HHMMSS.csv`) in the original file's directory.
+        *   If creating new data, it asks for a project name and defaults to saving (e.g., `ProjectName.csv`) in the currently selected "Output Folder".
+        *   You can change the name/location in the save dialog.
+        *   The main window's "Input File" and "Output Folder" paths are updated to this newly saved file.
 *   Click "Generate Chart".
 
-The GUI will automatically use the input filename as the base for the output filename and append a timestamp, saving the result in the selected folder.
+The GUI will use the currently selected "Input File" (which might be the one you just saved from the editor) and save the generated chart image (with a timestamp) in the currently selected "Output Folder" (which is also updated after saving from the editor).
 
 ## Input CSV Format
 
@@ -103,11 +113,12 @@ The input CSV file must contain the following columns:
 
 *   `WorkStream`: Category/group for items (used for sections).
 *   `WorkPackage`: The name of the work package or milestone to be displayed on the Gantt chart.
-*   `Start`: Item start date (Formats accepted: `YYYY-MM-DD` or `dd.mm.yyyy`). Excel date formats should also work but plain text dates in these formats are recommended.
-*   `End`: Item end date (Formats accepted: `YYYY-MM-DD` or `dd.mm.yyyy`). Excel date formats should also work but plain text dates in these formats are recommended.
+*   `Start`: Item start date (Required. Formats accepted: `YYYY-MM-DD` or `dd.mm.yyyy`). Excel date formats should also work but plain text dates in these formats are recommended.
 
-Optional columns:
+Optional columns (Provide *either* `End` *or* `WorkingDays` to define duration):
 
+*   `End`: Item end date (Formats accepted: `YYYY-MM-DD` or `dd.mm.yyyy`). If provided, this takes precedence over `WorkingDays`.
+*   `WorkingDays`: The duration of the task in working days (Monday-Friday). The script will calculate the `End` date based on this and the `Start` date, skipping weekends.
 *   `PercentComplete`: Work package completion percentage (0-100). Defaults to 0 if missing or invalid. Used to determine `active` or `done` status.
 *   `IsMilestone`: Flag (`True`, `False`, `yes`, `no`, `1`, `0`). If `True`, the row (identified by `WorkPackage`) is treated as an explicit milestone using its `End` date (or `Start` date if `End` is missing).
 *   `MilestoneGroup`: Identifier string. Work packages sharing the same identifier belong to a group. If all work packages in a group reach 100% completion, a milestone is automatically generated using this identifier as its name, placed at the latest `End` date of the constituent work packages.

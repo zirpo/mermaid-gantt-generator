@@ -17,9 +17,10 @@ def parse_input_file(file_path: str) -> pd.DataFrame | None:
         A pandas DataFrame with validated and cleaned data, or None if errors occur.
     """
     # Updated: Task column removed, WorkPackage is now required for display
-    required_columns = ['WorkStream', 'WorkPackage', 'Start', 'End']
-    optional_columns = ['PercentComplete', 'IsMilestone', 'MilestoneGroup']
-    date_columns = ['Start', 'End']
+    # Added WorkingDays as an alternative to End date
+    required_columns = ['WorkStream', 'WorkPackage', 'Start']
+    optional_columns = ['End', 'WorkingDays', 'PercentComplete', 'IsMilestone', 'MilestoneGroup']
+    date_columns = ['Start', 'End'] # End is now optional, but still needs date parsing if present
 
     try:
         # Determine file type and read accordingly
@@ -50,8 +51,9 @@ def parse_input_file(file_path: str) -> pd.DataFrame | None:
         # Add missing optional columns with default values
         for col in optional_columns:
             if col not in df.columns:
+                # Default End and WorkingDays to None, others to specific defaults later if needed
                 df[col] = None
-                logging.warning(f"Optional column '{col}' not found. Added with default values (None).")
+                logging.info(f"Optional column '{col}' not found. Added with default value (None).")
 
         # --- Data Cleaning and Type Conversion ---
 
@@ -61,23 +63,31 @@ def parse_input_file(file_path: str) -> pd.DataFrame | None:
             if df[col].notna().any():
                  df[col] = df[col].apply(lambda x: x.strip() if isinstance(x, str) else x)
 
-        # Dates - Try parsing multiple formats
+        # Dates - Try parsing multiple formats (Start is required, End is optional)
         for col in date_columns:
-            # Convert date columns to string BEFORE parsing to handle Excel's date objects/numbers
-            # This standardizes the input for pd.to_datetime
-            df[col] = df[col].astype(str)
-            # Attempt parsing dd.mm.yyyy first
-            parsed_dates_eu = pd.to_datetime(df[col], format='%d.%m.%Y', errors='coerce')
-            # Attempt parsing YYYY-MM-DD for those that failed the first format
-            parsed_dates_iso = pd.to_datetime(df[col], format='%Y-%m-%d', errors='coerce')
-            # Combine results: Use EU format if valid, otherwise use ISO format
-            df[col] = parsed_dates_eu.combine_first(parsed_dates_iso)
+            if col in df.columns: # Only process if column exists
+                # Convert date columns to string BEFORE parsing to handle Excel's date objects/numbers
+                # This standardizes the input for pd.to_datetime
+                # Fill NaN *before* astype(str) to avoid converting 'nan' string
+                df[col] = df[col].fillna('').astype(str)
 
-            # Check for any remaining NaNs after trying both formats
-            if df[col].isnull().any():
-                invalid_rows = df[df[col].isnull()].index.tolist()
-                logging.error(f"Invalid date format found in column '{col}' for rows (0-based index): {invalid_rows}. Expected DD.MM.YYYY or YYYY-MM-DD.")
-                # return None # Stricter approach: Exit if any date is invalid
+                # Attempt parsing dd.mm.yyyy first
+                parsed_dates_eu = pd.to_datetime(df[col], format='%d.%m.%Y', errors='coerce')
+                # Attempt parsing YYYY-MM-DD for those that failed the first format
+                parsed_dates_iso = pd.to_datetime(df[col], format='%Y-%m-%d', errors='coerce')
+                # Combine results: Use EU format if valid, otherwise use ISO format
+                df[col] = parsed_dates_eu.combine_first(parsed_dates_iso)
+
+                # Check for any remaining NaNs after trying both formats *if the column is Start*
+                if col == 'Start' and df[col].isnull().any():
+                    invalid_rows = df[df[col].isnull()].index.tolist()
+                    logging.error(f"Invalid date format found in required column '{col}' for rows (0-based index): {invalid_rows}. Expected DD.MM.YYYY or YYYY-MM-DD.")
+                    return None # Start date is essential
+                elif col == 'End' and df[col].isnull().any():
+                    # Log only a warning for invalid End dates, as WorkingDays might be used instead
+                    invalid_end_rows = df[df[col].isnull() & df[col].ne('')].index.tolist() # Find where parsing failed but wasn't originally empty
+                    if invalid_end_rows:
+                        logging.warning(f"Invalid date format found in optional column '{col}' for rows (0-based index): {invalid_end_rows}. Expected DD.MM.YYYY or YYYY-MM-DD. These rows might rely on 'WorkingDays'.")
 
         # PercentComplete
         if 'PercentComplete' in df.columns:
@@ -87,6 +97,18 @@ def parse_input_file(file_path: str) -> pd.DataFrame | None:
             df['PercentComplete'] = df['PercentComplete'].clip(0, 100)
         else:
              df['PercentComplete'] = 0 # Ensure column exists if not optional
+
+        # WorkingDays
+        if 'WorkingDays' in df.columns:
+            # Convert to numeric, coercing errors. Fill NaNs with None (not 0)
+            df['WorkingDays'] = pd.to_numeric(df['WorkingDays'], errors='coerce')
+            # Ensure integer type, allowing NaNs (which become pd.NA)
+            df['WorkingDays'] = df['WorkingDays'].astype('Int64') # Use nullable integer type
+            # Check for negative values
+            if (df['WorkingDays'] < 0).any():
+                invalid_rows = df[df['WorkingDays'] < 0].index.tolist()
+                logging.warning(f"Negative values found in 'WorkingDays' column for rows: {invalid_rows}. These will be ignored.")
+                df.loc[df['WorkingDays'] < 0, 'WorkingDays'] = pd.NA # Set invalid to NA
 
         # IsMilestone
         if 'IsMilestone' in df.columns:
@@ -102,13 +124,36 @@ def parse_input_file(file_path: str) -> pd.DataFrame | None:
         else:
             df['MilestoneGroup'] = '' # Ensure column exists if not optional
 
-        # Drop rows where essential data (like WorkPackage name or dates) might be missing after cleaning
-        # Check for NaNs in required columns that shouldn't be NaN after processing
-        # Updated: Check WorkPackage instead of Task
-        if df[['WorkPackage', 'Start', 'End']].isnull().any().any():
-             logging.warning("Rows with missing essential data (WorkPackage, Start, End) detected after cleaning.")
-             # Decide whether to drop or raise error - dropping for now
-             df.dropna(subset=['WorkPackage', 'Start', 'End'], inplace=True)
+        # --- Validation: End Date vs Working Days ---
+        has_end = df['End'].notna()
+        has_wd = df['WorkingDays'].notna() & (df['WorkingDays'] > 0) # Consider only valid, positive working days
+
+        # Case 1: Both End and WorkingDays provided
+        both_provided = has_end & has_wd
+        if both_provided.any():
+            rows_both = df[both_provided].index.tolist()
+            logging.warning(f"Rows {rows_both} have both 'End' date and 'WorkingDays' specified. Prioritizing 'End' date.")
+            # Nullify WorkingDays where End date takes precedence
+            df.loc[both_provided, 'WorkingDays'] = pd.NA
+
+        # Case 2: Neither End nor WorkingDays provided (and not a milestone)
+        # Milestones might legitimately have only a Start/End date treated as the milestone date
+        neither_provided = ~has_end & ~has_wd & (df['IsMilestone'] == False)
+        if neither_provided.any():
+            rows_neither = df[neither_provided].index.tolist()
+            logging.error(f"Rows {rows_neither} are missing both 'End' date and 'WorkingDays'. Cannot determine task duration. Please provide one.")
+            # Option 1: Return None to stop processing
+            # return None
+            # Option 2: Drop these rows and continue (chosen here)
+            logging.warning(f"Dropping rows {rows_neither} due to missing duration information.")
+            df.drop(index=rows_neither, inplace=True)
+
+
+        # Drop rows where essential data (WorkPackage name or Start date) might be missing after cleaning
+        essential_cols = ['WorkPackage', 'Start']
+        if df[essential_cols].isnull().any().any():
+             logging.warning("Rows with missing essential data (WorkPackage, Start) detected after cleaning.")
+             df.dropna(subset=essential_cols, inplace=True)
 
 
         logging.info(f"Successfully parsed and validated '{file_path}'.")

@@ -125,8 +125,8 @@ class GanttApp(tk.Tk):
             self.input_file_path.set(filepath)
             # Set default output folder to input file's directory
             input_dir = os.path.dirname(filepath)
-            self.output_folder_path.set(input_dir)
-            self.status_text.set("Input file selected. Output folder defaulted.")
+            self.output_folder_path.set(input_dir) # Update the output folder variable
+            self.status_text.set("Input file selected. Output folder set to input directory.")
 
 
     def _select_output_folder(self):
@@ -246,13 +246,19 @@ class TimelineEditorWindow(tk.Toplevel):
         self.master_app = master # Reference to the main GanttApp instance
         self.title("Timeline Editor")
         self.geometry("800x600") # Adjust size as needed
+        self.original_file_path = None # Store the path of the file loaded into the editor
 
         # Prevent interaction with main window while editor is open
         self.grab_set()
         self.focus_set()
 
         self._create_editor_widgets()
-        self._load_initial_data() # Load data if main app has a file selected
+        # Load data if main app has a file selected
+        initial_file = self.master_app.input_file_path.get()
+        if initial_file and os.path.exists(initial_file):
+             self._load_initial_data(initial_file)
+        else:
+             logger.info("No valid input file selected in main window. Editor starts empty.")
 
     def _create_editor_widgets(self):
         # --- Main Frame ---
@@ -263,24 +269,26 @@ class TimelineEditorWindow(tk.Toplevel):
         tree_frame = ttk.Frame(main_frame)
         tree_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
 
-        # Define columns
-        columns = ("name", "start", "end", "complete", "is_milestone", "group")
+        # Define columns - Added 'working_days'
+        columns = ("name", "start", "end", "working_days", "complete", "is_milestone", "group")
         self.tree = ttk.Treeview(tree_frame, columns=columns, show="headings") # show="tree headings" to show hierarchy lines
 
-        # Define headings
+        # Define headings - Added 'working_days'
         self.tree.heading("name", text="WorkStream / WorkPackage")
         self.tree.heading("start", text="Start Date")
         self.tree.heading("end", text="End Date")
+        self.tree.heading("working_days", text="Work Days") # New heading
         self.tree.heading("complete", text="% Complete")
         self.tree.heading("is_milestone", text="Is Milestone?")
         self.tree.heading("group", text="Milestone Group")
 
-        # Configure column widths (adjust as needed)
+        # Configure column widths (adjust as needed) - Added 'working_days'
         self.tree.column("name", width=250, anchor=tk.W)
-        self.tree.column("start", width=100, anchor=tk.CENTER)
-        self.tree.column("end", width=100, anchor=tk.CENTER)
-        self.tree.column("complete", width=80, anchor=tk.CENTER)
-        self.tree.column("is_milestone", width=80, anchor=tk.CENTER)
+        self.tree.column("start", width=90, anchor=tk.CENTER)
+        self.tree.column("end", width=90, anchor=tk.CENTER)
+        self.tree.column("working_days", width=70, anchor=tk.CENTER) # New column width
+        self.tree.column("complete", width=70, anchor=tk.CENTER)
+        self.tree.column("is_milestone", width=70, anchor=tk.CENTER)
         self.tree.column("group", width=100, anchor=tk.W)
 
         # Add scrollbars
@@ -310,13 +318,73 @@ class TimelineEditorWindow(tk.Toplevel):
         ttk.Button(bottom_frame, text="OK / Use This Data", command=self._use_data).pack(side=tk.RIGHT, padx=5)
 
 
-    def _load_initial_data(self):
-        # TODO: Optionally load data from master_app.input_file_path if it exists and is valid
-        # For now, starts empty
-        # TODO: Optionally load data from master_app.input_file_path if it exists and is valid
-        # For now, starts empty
-        # Example: If master_app.input_file_path.get() is valid, parse it and populate tree
-        pass
+    def _load_initial_data(self, file_path: str):
+        """Loads data from the specified file path into the Treeview."""
+        logger.info(f"Attempting to load data into editor from: {file_path}")
+        # Import the parser function here to avoid circular dependency at module level if gui is imported elsewhere
+        try:
+            from src.input_parser import parse_input_file
+        except ImportError:
+             messagebox.showerror("Import Error", "Could not import the input parser.", parent=self)
+             return
+
+        # Parse the input file
+        df = parse_input_file(file_path)
+
+        if df is None:
+            messagebox.showerror("Load Error", f"Failed to parse input file:\n{file_path}\n\nPlease check file format and logs.", parent=self)
+            return
+        if df.empty:
+            messagebox.showinfo("Empty File", "The selected file is empty or contains no valid data.", parent=self)
+            return
+
+        # Clear existing tree data
+        self.tree.delete(*self.tree.get_children())
+
+        # Populate treeview
+        try:
+            # Group by WorkStream, handle potential NaN WorkStream names
+            df['WorkStream'] = df['WorkStream'].fillna('Unknown WorkStream') # Replace NaN streams
+            grouped = df.groupby('WorkStream', sort=False)
+            stream_iids = {} # Keep track of stream item IDs
+
+            for workstream_name, group in grouped:
+                # Add WorkStream as top-level item
+                stream_iid = self.tree.insert("", tk.END, text=workstream_name, values=(workstream_name, "", "", "", "", "", ""), open=True)
+                stream_iids[workstream_name] = stream_iid
+
+                # Add WorkPackages under this stream
+                for index, row in group.iterrows():
+                    # Format data for display
+                    start_date_str = row['Start'].strftime('%Y-%m-%d') if pd.notna(row['Start']) else ""
+                    end_date_str = row['End'].strftime('%Y-%m-%d') if pd.notna(row['End']) else ""
+                    # Handle potential pandas NA for nullable Int64
+                    working_days_str = str(row['WorkingDays']) if pd.notna(row['WorkingDays']) else ""
+                    percent_str = str(int(row['PercentComplete'])) if pd.notna(row['PercentComplete']) else "0"
+                    is_milestone_str = "Yes" if row['IsMilestone'] else "No"
+                    group_str = str(row['MilestoneGroup']) if pd.notna(row['MilestoneGroup']) else ""
+                    wp_name_str = str(row['WorkPackage']) if pd.notna(row['WorkPackage']) else "Unnamed Package"
+
+                    # Insert package under the correct stream
+                    self.tree.insert(stream_iid, tk.END, values=(
+                        wp_name_str,
+                        start_date_str,
+                        end_date_str,
+                        working_days_str,
+                        percent_str,
+                        is_milestone_str,
+                        group_str
+                    ))
+            logger.info(f"Successfully loaded data from {file_path} into editor.")
+        except Exception as e:
+             logger.error(f"Error populating editor treeview: {e}", exc_info=True)
+             messagebox.showerror("Load Error", f"An error occurred while loading data into the editor:\n{e}", parent=self)
+             # Clear tree again on error to avoid partial load state
+             self.tree.delete(*self.tree.get_children())
+             self.original_file_path = None # Reset original path on load error
+        else:
+             # Successfully loaded, store the path
+             self.original_file_path = file_path
 
     def _add_workstream(self):
         """Adds a new WorkStream (top-level item) to the Treeview."""
@@ -344,17 +412,18 @@ class TimelineEditorWindow(tk.Toplevel):
              return
 
         # --- Use Custom Dialog with Callback ---
-        def _on_add_dialog_close(result):
-            if result: # Check if user clicked OK
-                wp_name, start_date, end_date, percent_complete, is_milestone, milestone_group = result
+        def _on_add_dialog_close(result_dict):
+            if result_dict: # Check if user clicked OK (result is now a dict)
                 # --- Add to Treeview under the selected WorkStream ---
+                # Order must match the 'columns' definition
                 self.tree.insert(selected_id, tk.END, values=(
-                    wp_name,
-                    start_date, # Already formatted as string or empty
-                    end_date,   # Already formatted as string or empty
-                    percent_complete,
-                    "Yes" if is_milestone else "No",
-                    milestone_group
+                    result_dict["WorkPackage"],
+                    result_dict["Start"],
+                    result_dict["End"],
+                    result_dict["WorkingDays"], # Add working days value
+                    result_dict["PercentComplete"],
+                    "Yes" if result_dict["IsMilestone"] else "No",
+                    result_dict["MilestoneGroup"]
                 ))
 
         # Instantiate dialog, passing the callback, do not wait
@@ -382,27 +451,30 @@ class TimelineEditorWindow(tk.Toplevel):
                 self.tree.item(selected_id, values=(new_name,) + item_values[1:])
         else:
             # --- Edit WorkPackage using Custom Dialog ---
+            # Map treeview columns back to initial_data keys for the dialog
             initial_data = {
                 "name": item_values[0],
                 "start": item_values[1],
                 "end": item_values[2],
-                "complete": item_values[3],
-                "is_milestone": item_values[4].lower() == 'yes',
-                "group": item_values[5]
+                "working_days": item_values[3], # Add working days
+                "complete": item_values[4],
+                "is_milestone": item_values[5].lower() == 'yes',
+                "group": item_values[6]
             }
 
             # --- Use Custom Dialog with Callback ---
-            def _on_edit_dialog_close(result):
-                 if result:
-                    wp_name, start_date, end_date, percent_complete, is_milestone, milestone_group = result
-                    # Update the item in the Treeview
+            def _on_edit_dialog_close(result_dict):
+                 if result_dict:
+                    # Update the item in the Treeview using the dictionary result
+                    # Order must match the 'columns' definition
                     self.tree.item(selected_id, values=(
-                        wp_name,
-                        start_date,
-                        end_date,
-                        percent_complete,
-                        "Yes" if is_milestone else "No",
-                        milestone_group
+                        result_dict["WorkPackage"],
+                        result_dict["Start"],
+                        result_dict["End"],
+                        result_dict["WorkingDays"], # Add working days value
+                        result_dict["PercentComplete"],
+                        "Yes" if result_dict["IsMilestone"] else "No",
+                        result_dict["MilestoneGroup"]
                     ))
 
             # Instantiate dialog, passing the callback, do not wait
@@ -448,17 +520,17 @@ class TimelineEditorWindow(tk.Toplevel):
                 for package_iid in self.tree.get_children(stream_iid):
                     pkg_values = self.tree.item(package_iid, "values")
                     # Map values to column names based on Treeview column order
-                    # Convert 'Yes'/'No' back to True/False for DataFrame/CSV
-                    is_milestone_bool = str(pkg_values[4]).lower() == 'yes'
+                    # Convert 'Yes'/'No' back to True/False strings for CSV
+                    is_milestone_str = str(str(pkg_values[5]).lower() == 'yes')
                     row_data = {
                         'WorkStream': stream_name,
                         'WorkPackage': pkg_values[0],
                         'Start': pkg_values[1],
                         'End': pkg_values[2],
-                        'PercentComplete': pkg_values[3],
-                        # Save as True/False strings for CSV compatibility with parser
-                        'IsMilestone': str(is_milestone_bool),
-                        'MilestoneGroup': pkg_values[5]
+                        'WorkingDays': pkg_values[3], # Add WorkingDays
+                        'PercentComplete': pkg_values[4],
+                        'IsMilestone': is_milestone_str,
+                        'MilestoneGroup': pkg_values[6]
                     }
                     data.append(row_data)
 
@@ -468,30 +540,70 @@ class TimelineEditorWindow(tk.Toplevel):
 
             df = pd.DataFrame(data)
 
-            # --- Create and save temporary file ---
-            # Ensure previous temp file is cleaned up if user edits multiple times
-            if self.master_app.temp_file_path and os.path.exists(self.master_app.temp_file_path):
-                try: os.remove(self.master_app.temp_file_path)
-                except OSError: pass # Ignore cleanup error
+            # --- Determine Default Save Location and Filename ---
+            default_dir = ""
+            default_filename = ""
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-            # Create a new temporary file
-            temp_fd, temp_path = tempfile.mkstemp(suffix=".csv", prefix="timeline_gui_")
-            os.close(temp_fd) # Close the file descriptor
+            if self.original_file_path: # Data was loaded from a file
+                original_p = Path(self.original_file_path)
+                default_dir = str(original_p.parent)
+                base_name = original_p.stem
+                default_filename = f"{base_name}_{timestamp}.csv"
+                dialog_title = "Save Edited Timeline As"
+            else: # New data created in editor
+                default_dir = self.master_app.output_folder_path.get() # Use main window's output folder
+                # Prompt for project name
+                project_name = simpledialog.askstring("Project Name", "Enter a name for this timeline project:", parent=self)
+                if not project_name:
+                     logger.info("User cancelled project name input.")
+                     return # Abort if user cancels name input
+                # Sanitize project name slightly for filename (replace spaces, etc.) - basic example
+                safe_project_name = project_name.replace(" ", "_").replace("/", "-")
+                default_filename = f"{safe_project_name}.csv"
+                dialog_title = "Save New Timeline As"
 
-            # Save DataFrame to the temporary CSV
-            # Use standard CSV columns expected by input_parser
-            # Ensure boolean 'IsMilestone' is converted correctly if needed (already string 'True'/'False')
-            df.to_csv(temp_path, index=False, quoting=csv.QUOTE_NONNUMERIC,
-                      columns=['WorkStream', 'WorkPackage', 'Start', 'End',
-                               'PercentComplete', 'IsMilestone', 'MilestoneGroup'])
+            # --- Ask User to Confirm/Change Save Path ---
+            save_path = filedialog.asksaveasfilename(
+                title=dialog_title,
+                initialdir=default_dir,
+                initialfile=default_filename,
+                defaultextension=".csv",
+                filetypes=(("CSV files", "*.csv"), ("All files", "*.*"))
+            )
 
-            # Update the main app's input path and store temp path for cleanup
-            self.master_app.input_file_path.set(temp_path)
-            self.master_app.temp_file_path = temp_path
-            self.master_app.status_text.set(f"Using data edited in GUI (temp file: {os.path.basename(temp_path)})")
+            if not save_path:
+                logger.info("User cancelled save dialog.")
+                return # Abort if user cancels save dialog
 
-            logger.info(f"Saved edited data to temporary file: {temp_path}")
-            self.destroy() # Close the editor window
+            # --- Save DataFrame to the chosen path ---
+            try:
+                csv_columns = ['WorkStream', 'WorkPackage', 'Start', 'End', 'WorkingDays',
+                               'PercentComplete', 'IsMilestone', 'MilestoneGroup']
+                df.to_csv(save_path, index=False, quoting=csv.QUOTE_NONNUMERIC, columns=csv_columns)
+                logger.info(f"Saved edited data to permanent file: {save_path}")
+
+                # --- Update Main App Window ---
+                self.master_app.input_file_path.set(save_path)
+                # Also update the output folder to where the CSV was saved
+                saved_dir = os.path.dirname(save_path)
+                self.master_app.output_folder_path.set(saved_dir)
+                self.master_app.status_text.set(f"Saved edited data to: {os.path.basename(save_path)}")
+
+                # --- Cleanup Old Temp File (if any existed) ---
+                if self.master_app.temp_file_path and os.path.exists(self.master_app.temp_file_path):
+                    try:
+                        os.remove(self.master_app.temp_file_path)
+                        logger.info(f"Cleaned up old temporary file: {self.master_app.temp_file_path}")
+                    except OSError as e:
+                        logger.warning(f"Could not remove old temporary file '{self.master_app.temp_file_path}': {e}")
+                self.master_app.temp_file_path = None # Ensure temp path is cleared
+
+                self.destroy() # Close the editor window
+
+            except Exception as e:
+                 logger.error(f"Failed to save edited data to {save_path}: {e}", exc_info=True)
+                 messagebox.showerror("Save Error", f"Could not save the timeline data:\n{e}", parent=self)
 
         except Exception as e:
             logger.error(f"Failed to process or save edited data: {e}", exc_info=True)
@@ -523,6 +635,9 @@ class WorkPackageDialog(tk.Toplevel):
         self.percent_complete_var = tk.IntVar(value=self._parse_initial_int(self.initial_data.get("complete", 0)))
         self.is_milestone_var = tk.BooleanVar(value=self.initial_data.get("is_milestone", False))
         self.milestone_group_var = tk.StringVar(value=self.initial_data.get("group", ""))
+        # New variables for duration input mode and working days
+        self.duration_mode_var = tk.StringVar(value="end_date") # 'end_date' or 'working_days'
+        self.working_days_var = tk.StringVar(value=self._parse_initial_int(self.initial_data.get("working_days", ""))) # Store as string initially
 
         # Populate initial date values if provided, otherwise default Start Date to today
         start_date_provided = self._parse_initial_date("start", self.start_day_var, self.start_month_var, self.start_year_var)
@@ -534,7 +649,13 @@ class WorkPackageDialog(tk.Toplevel):
             self.start_year_var.set(str(today.year))
 
         # Parse end date if provided, otherwise leave blank
-        self._parse_initial_date("end", self.end_day_var, self.end_month_var, self.end_year_var)
+        end_date_provided = self._parse_initial_date("end", self.end_day_var, self.end_month_var, self.end_year_var)
+
+        # Determine initial duration mode based on provided data
+        if not end_date_provided and self.working_days_var.get():
+             self.duration_mode_var.set("working_days")
+        else:
+             self.duration_mode_var.set("end_date") # Default to end_date if both or neither provided
 
 
         # --- Layout ---
@@ -636,25 +757,45 @@ class WorkPackageDialog(tk.Toplevel):
         end_year_combo = ttk.Combobox(end_date_frame, textvariable=self.end_year_var, values=years, width=5, state="readonly")
         end_year_combo.pack(side=tk.LEFT, padx=(2, 5))
 
-        # Clear Button for End Date
-        ttk.Button(end_date_frame, text="Clear", width=5,
-                   command=lambda: (self.end_day_var.set(""), self.end_month_var.set(""), self.end_year_var.set(""))
-                  ).pack(side=tk.LEFT)
+        self.end_date_frame = end_date_frame # Store frame reference
+        self.end_day_combo = end_day_combo
+        self.end_month_combo = end_month_combo
+        self.end_year_combo = end_year_combo
+        self.end_clear_button = ttk.Button(end_date_frame, text="Clear", width=5,
+                   command=lambda: (self.end_day_var.set(""), self.end_month_var.set(""), self.end_year_var.set("")))
+        self.end_clear_button.pack(side=tk.LEFT)
+
+        # --- Duration Mode Selection ---
+        duration_frame = ttk.Frame(master)
+        duration_frame.grid(row=3, column=0, columnspan=4, sticky=tk.W, padx=5, pady=5)
+        ttk.Label(duration_frame, text="Duration Input:").pack(side=tk.LEFT, padx=(0, 10))
+        self.end_date_radio = ttk.Radiobutton(duration_frame, text="End Date", variable=self.duration_mode_var, value="end_date", command=self._toggle_duration_fields)
+        self.end_date_radio.pack(side=tk.LEFT)
+        self.working_days_radio = ttk.Radiobutton(duration_frame, text="Working Days", variable=self.duration_mode_var, value="working_days", command=self._toggle_duration_fields)
+        self.working_days_radio.pack(side=tk.LEFT, padx=(10, 0))
+
+        # --- Working Days Input ---
+        ttk.Label(master, text="Working Days:").grid(row=4, column=0, sticky=tk.W, padx=5, pady=2)
+        self.working_days_entry = ttk.Entry(master, textvariable=self.working_days_var, width=5)
+        self.working_days_entry.grid(row=4, column=1, sticky=tk.W, padx=5, pady=2)
 
 
-        ttk.Label(master, text="% Complete:").grid(row=3, column=0, sticky=tk.W, padx=5, pady=2)
+        ttk.Label(master, text="% Complete:").grid(row=5, column=0, sticky=tk.W, padx=5, pady=2)
         # Use Spinbox or Scale for better integer input? For now, Entry + validation
         complete_entry = ttk.Entry(master, textvariable=self.percent_complete_var, width=5)
-        complete_entry.grid(row=3, column=1, sticky=tk.W, padx=5, pady=2)
+        complete_entry.grid(row=5, column=1, sticky=tk.W, padx=5, pady=2)
         # Add validation later if needed
 
-        ttk.Label(master, text="Is Milestone?").grid(row=4, column=0, sticky=tk.W, padx=5, pady=2)
+        ttk.Label(master, text="Is Milestone?").grid(row=6, column=0, sticky=tk.W, padx=5, pady=2)
         ms_check = ttk.Checkbutton(master, variable=self.is_milestone_var, onvalue=True, offvalue=False)
-        ms_check.grid(row=4, column=1, columnspan=3, sticky=tk.W, padx=5, pady=2) # Span 3
+        ms_check.grid(row=6, column=1, columnspan=3, sticky=tk.W, padx=5, pady=2) # Span 3
 
-        ttk.Label(master, text="Milestone Group (Optional):").grid(row=5, column=0, sticky=tk.W, padx=5, pady=2)
+        ttk.Label(master, text="Milestone Group (Optional):").grid(row=7, column=0, sticky=tk.W, padx=5, pady=2)
         group_entry = ttk.Entry(master, textvariable=self.milestone_group_var, width=40)
-        group_entry.grid(row=5, column=1, columnspan=3, sticky=(tk.W, tk.E), padx=5, pady=2) # Span 3
+        group_entry.grid(row=7, column=1, columnspan=3, sticky=(tk.W, tk.E), padx=5, pady=2) # Span 3
+
+        # Initial state update for duration fields
+        self._toggle_duration_fields()
 
         return name_entry # Initial focus
 
@@ -672,6 +813,38 @@ class WorkPackageDialog(tk.Toplevel):
 
         box.pack()
 
+    def _toggle_duration_fields(self):
+        """Enable/disable End Date or Working Days fields based on radio selection."""
+        mode = self.duration_mode_var.get()
+        if mode == "end_date":
+            # Enable End Date fields
+            self.end_day_combo.config(state="readonly")
+            self.end_month_combo.config(state="readonly")
+            self.end_year_combo.config(state="readonly")
+            self.end_clear_button.config(state="normal")
+            # Disable Working Days field
+            self.working_days_entry.config(state="disabled")
+            # Clear working days value when switching to end date
+            # self.working_days_var.set("")
+        elif mode == "working_days":
+            # Disable End Date fields
+            self.end_day_combo.config(state="disabled")
+            self.end_month_combo.config(state="disabled")
+            self.end_year_combo.config(state="disabled")
+            self.end_clear_button.config(state="disabled")
+            # Enable Working Days field
+            self.working_days_entry.config(state="normal")
+            # Clear end date value when switching to working days
+            # self.end_day_var.set("")
+            # self.end_month_var.set("")
+            # self.end_year_var.set("")
+        else: # Should not happen
+             self.end_day_combo.config(state="disabled")
+             self.end_month_combo.config(state="disabled")
+             self.end_year_combo.config(state="disabled")
+             self.end_clear_button.config(state="disabled")
+             self.working_days_entry.config(state="disabled")
+
     def _ok(self, event=None):
         """Handle OK button click."""
         if not self.wp_name_var.get():
@@ -687,37 +860,64 @@ class WorkPackageDialog(tk.Toplevel):
              messagebox.showwarning("Input Error", f"Invalid % Complete: {e}", parent=self)
              return
 
-        # --- Assemble and Validate Dates ---
+        # --- Assemble and Validate Dates / Working Days ---
         start_date_str = self._assemble_date_string(self.start_day_var, self.start_month_var, self.start_year_var)
         if start_date_str == "INVALID":
             messagebox.showwarning("Input Error", "Invalid Start Date selected.", parent=self)
             return
+        if not start_date_str: # Start date is required
+             messagebox.showwarning("Input Error", "Start Date is required.", parent=self)
+             return
 
-        end_date_str = self._assemble_date_string(self.end_day_var, self.end_month_var, self.end_year_var)
-        if end_date_str == "INVALID":
-            messagebox.showwarning("Input Error", "Invalid End Date selected.", parent=self)
-            return
+        end_date_str = ""
+        working_days_val = ""
+        duration_mode = self.duration_mode_var.get()
 
-        # Optional: Validate start <= end if both are provided
-        if start_date_str and end_date_str:
+        if duration_mode == "end_date":
+            end_date_str = self._assemble_date_string(self.end_day_var, self.end_month_var, self.end_year_var)
+            if end_date_str == "INVALID":
+                messagebox.showwarning("Input Error", "Invalid End Date selected.", parent=self)
+                return
+            if not end_date_str:
+                 messagebox.showwarning("Input Error", "End Date is required when 'End Date' mode is selected.", parent=self)
+                 return
+            # Validate start <= end
             try:
-                start_dt = datetime.strptime(start_date_str, "%Y-%m-%d")
-                end_dt = datetime.strptime(end_date_str, "%Y-%m-%d")
-                if start_dt > end_dt:
-                    messagebox.showwarning("Input Error", "Start Date cannot be after End Date.", parent=self)
-                    return
+                    start_dt = datetime.strptime(start_date_str, "%Y-%m-%d")
+                    end_dt = datetime.strptime(end_date_str, "%Y-%m-%d")
+                    if start_dt > end_dt:
+                        messagebox.showwarning("Input Error", "Start Date cannot be after End Date.", parent=self)
+                        return
             except ValueError:
                  messagebox.showwarning("Input Error", "Internal error validating date range.", parent=self)
                  return # Should not happen if assemble worked
+        elif duration_mode == "working_days":
+            try:
+                wd = int(self.working_days_var.get())
+                if wd <= 0:
+                    raise ValueError("Working days must be a positive integer.")
+                working_days_val = str(wd) # Store as string for consistency if needed later
+            except (ValueError, TypeError):
+                 messagebox.showwarning("Input Error", "Working Days must be a positive integer.", parent=self)
+                 return
+            if not working_days_val: # Double check after conversion
+                 messagebox.showwarning("Input Error", "Working Days is required when 'Working Days' mode is selected.", parent=self)
+                 return
+        else: # Should not happen
+            messagebox.showerror("Internal Error", "Invalid duration mode selected.", parent=self)
+            return
 
-        self.result = (
-            self.wp_name_var.get(),
-            start_date_str,
-            end_date_str,
-            self.percent_complete_var.get(),
-            self.is_milestone_var.get(),
-            self.milestone_group_var.get()
-        )
+
+        # Result now includes working_days (which will be empty if end_date mode was used)
+        self.result = {
+            "WorkPackage": self.wp_name_var.get(),
+            "Start": start_date_str,
+            "End": end_date_str, # Will be "" if working_days mode
+            "WorkingDays": working_days_val, # Will be "" if end_date mode
+            "PercentComplete": self.percent_complete_var.get(),
+            "IsMilestone": self.is_milestone_var.get(),
+            "MilestoneGroup": self.milestone_group_var.get()
+        }
         self.withdraw() # Hide window
         self.update_idletasks() # Process pending events
         # Call the callback before destroying
