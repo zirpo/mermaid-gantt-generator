@@ -122,8 +122,10 @@ Optional columns (Provide *either* `End` *or* `WorkingDays` to define duration):
 *   `PercentComplete`: Work package completion percentage (0-100). Defaults to 0 if missing or invalid. Used to determine `active` or `done` status.
 *   `IsMilestone`: Flag (`True`, `False`, `yes`, `no`, `1`, `0`). If `True`, the row (identified by `WorkPackage`) is treated as an explicit milestone using its `End` date (or `Start` date if `End` is missing).
 *   `MilestoneGroup`: Identifier string. Work packages sharing the same identifier belong to a group. If all work packages in a group reach 100% completion, a milestone is automatically generated using this identifier as its name, placed at the latest `End` date of the constituent work packages.
+*   `Team` (Optional, Informational): The team responsible for the work package. Ignored by Gantt generation.
+*   `SPOC` (Optional, Informational): The Single Point of Contact for the work package. Ignored by Gantt generation.
 
-See `templates/template.csv` or `templates/template.xlsx` (downloadable via GUI) for the exact header structure. See `data/sample_timeline.csv` for a populated example.
+See `templates/template.csv` or `templates/template.xlsx` (downloadable via GUI) for the exact header structure. The `template.csv` file includes all columns, including the informational ones. See `data/sample_timeline.csv` for a populated example (may not include informational columns).
 
 ## Testing
 
